@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Conge — Token Risk Scanner</title>
+  <meta name="description" content="Conge is a read-only token risk scanner for EVM chains." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <img class="logo" src="assets/logo.svg" alt="" width="40" height="40" onerror="this.style.display='none'" />
+      <div class="brand">
+        <h1>Conge</h1>
+        <p class="tagline">TOKEN RISK SCANNER</p>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section id="network-status" class="card" aria-labelledby="network-status-heading">
+      <h2 id="network-status-heading">Network status</h2>
+      <dl class="status-grid">
+        <div class="status-row">
+          <dt>Chain</dt>
+          <dd id="network-name">—</dd>
+        </div>
+        <div class="status-row">
+          <dt>Chain ID</dt>
+          <dd id="network-chain-id">—</dd>
+        </div>
+        <div class="status-row">
+          <dt>Latest block</dt>
+          <dd id="network-block-number">—</dd>
+        </div>
+        <div class="status-row">
+          <dt>Status</dt>
+          <dd id="network-connection-status" class="status-pending">Connecting…</dd>
+        </div>
+      </dl>
+      <p id="network-error" class="error-message" hidden></p>
+      <button id="network-retry" type="button" class="secondary-button" hidden>Retry connection</button>
+    </section>
+
+    <section id="token-scan" class="card" aria-labelledby="token-scan-heading">
+      <h2 id="token-scan-heading">Scan a token</h2>
+      <form id="scan-form" novalidate>
+        <label for="token-address">Contract address</label>
+        <input
+          id="token-address"
+          name="token-address"
+          type="text"
+          inputmode="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="0x..."
+          required
+        />
+        <p id="address-error" class="error-message" hidden></p>
+        <button type="submit" class="primary-button" id="scan-button">Scan</button>
+      </form>
+
+      <div id="scan-result" class="result-card" hidden>
+        <h3 id="scan-result-title">Token</h3>
+        <dl class="result-grid">
+          <div class="result-row">
+            <dt>Address</dt>
+            <dd id="result-address">—</dd>
+          </div>
+          <div class="result-row">
+            <dt>Name</dt>
+            <dd id="result-name">—</dd>
+          </div>
+          <div class="result-row">
+            <dt>Symbol</dt>
+            <dd id="result-symbol">—</dd>
+          </div>
+          <div class="result-row">
+            <dt>Decimals</dt>
+            <dd id="result-decimals">—</dd>
+          </div>
+          <div class="result-row">
+            <dt>Total supply</dt>
+            <dd id="result-total-supply">—</dd>
+          </div>
+          <div class="result-row">
+            <dt>Owner</dt>
+            <dd id="result-owner">—</dd>
+          </div>
+        </dl>
+      </div>
+
+      <p id="scan-error" class="error-message" hidden></p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      Conge is read-only: it never requests wallet access, signatures, or transactions.
+      Data is not financial advice — always verify on the
+      <a id="explorer-link" href="#" target="_blank" rel="noopener noreferrer">block explorer</a>.
+    </p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
