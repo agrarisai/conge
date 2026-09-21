@@ -35,6 +35,10 @@
           <dd id="network-block-number">—</dd>
         </div>
         <div class="status-row">
+          <dt>Data source</dt>
+          <dd id="network-source">—</dd>
+        </div>
+        <div class="status-row">
           <dt>Status</dt>
           <dd id="network-connection-status" class="status-pending">Connecting…</dd>
         </div>
@@ -73,6 +77,10 @@
             <dd id="result-address">—</dd>
           </div>
           <div class="result-row">
+            <dt>Contract</dt>
+            <dd id="result-is-contract">—</dd>
+          </div>
+          <div class="result-row">
             <dt>Name</dt>
             <dd id="result-name">—</dd>
           </div>
@@ -89,13 +97,29 @@
             <dd id="result-total-supply">—</dd>
           </div>
           <div class="result-row">
+            <dt>Holders</dt>
+            <dd id="result-holders">—</dd>
+          </div>
+          <div class="result-row">
+            <dt>Verified source</dt>
+            <dd id="result-verified">—</dd>
+          </div>
+          <div class="result-row">
             <dt>Owner</dt>
             <dd id="result-owner">—</dd>
+          </div>
+          <div class="result-row">
+            <dt>Data source</dt>
+            <dd id="result-source">—</dd>
           </div>
         </dl>
       </div>
 
       <p id="scan-error" class="error-message" hidden></p>
+      <details id="scan-tech-details" class="tech-details" hidden>
+        <summary>Technical details</summary>
+        <pre id="scan-tech-details-content"></pre>
+      </details>
     </section>
   </main>
 
