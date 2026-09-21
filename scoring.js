@@ -278,8 +278,8 @@ export function scoreHolderConcentration(holders, totalSupplyRaw, thresholds = T
       };
     }
     return {
-      qualifier: "well distributed",
-      detail: `Supply is spread across enough holders that no small group can easily move the price alone.${top10ContractNote}`,
+      qualifier: "below the concern threshold",
+      detail: `This is below the concern threshold for coordinated selling risk.${top10ContractNote}`,
     };
   }
 
