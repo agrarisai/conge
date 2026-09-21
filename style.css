@@ -9,6 +9,18 @@
   --color-muted: #5B5D63;
   --radius: 10px;
   --spacing: 1rem;
+
+  /* Risk levels — deliberately neutral warning tones, not the brand green. */
+  --risk-info-bg: #EEF1F4;
+  --risk-info-text: #3A4750;
+  --risk-low-bg: #E4EEF2;
+  --risk-low-text: #1F5C73;
+  --risk-medium-bg: #FFF1D6;
+  --risk-medium-text: #8A5A00;
+  --risk-high-bg: #FDECEC;
+  --risk-high-text: #8A1C1C;
+  --risk-unknown-bg: #EFEFEF;
+  --risk-unknown-text: #5B5D63;
 }
 
 * {
@@ -224,6 +236,84 @@ input[type="text"]:focus {
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid var(--color-border);
+}
+
+.risk-summary {
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.risk-level-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.risk-level-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-muted);
+}
+
+.risk-level-value {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.risk-level-low { background-color: var(--risk-low-bg); color: var(--risk-low-text); }
+.risk-level-medium { background-color: var(--risk-medium-bg); color: var(--risk-medium-text); }
+.risk-level-high { background-color: var(--risk-high-bg); color: var(--risk-high-text); }
+.risk-level-insufficient-data { background-color: var(--risk-unknown-bg); color: var(--risk-unknown-text); }
+
+.risk-disclaimer {
+  font-size: 0.78rem;
+  color: var(--color-muted);
+  margin: 0 0 0.75rem;
+}
+
+.risk-findings-group h4 {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-muted);
+  margin: 0.75rem 0 0.4rem;
+}
+
+.risk-finding {
+  border-left: 3px solid transparent;
+  border-radius: 6px;
+  padding: 0.45rem 0.65rem;
+  margin-bottom: 0.4rem;
+}
+
+.risk-finding-title {
+  margin: 0;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.risk-finding-detail {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  color: var(--color-muted);
+}
+
+.risk-finding-info { background-color: var(--risk-info-bg); border-left-color: var(--risk-info-text); }
+.risk-finding-low { background-color: var(--risk-low-bg); border-left-color: var(--risk-low-text); }
+.risk-finding-medium { background-color: var(--risk-medium-bg); border-left-color: var(--risk-medium-text); }
+.risk-finding-high { background-color: var(--risk-high-bg); border-left-color: var(--risk-high-text); }
+
+.risk-finding-unknown {
+  background-color: var(--risk-unknown-bg);
+  border-left-color: var(--risk-unknown-text);
+  border-left-style: dashed;
 }
 
 .result-card h3 {
