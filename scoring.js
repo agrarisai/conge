@@ -1,11 +1,14 @@
 // Risk Score v1 — pure, rule-based scoring. No network calls here: every
 // function takes plain data ("facts") gathered elsewhere (see app.js) and
 // returns findings. Every finding has a severity, a one-line title, and a
-// "why it matters" detail. A check with no data returns a finding with
-// known: false ("Unknown") — Unknown is never treated as a pass.
+// "why it matters" detail — and that text is always specific to the
+// outcome: a finding that passed never carries a warning explanation, and
+// vice versa. A check with no data returns a finding with known: false
+// ("Unknown") — Unknown is never treated as a pass.
 //
 // Tune thresholds by editing THRESHOLDS below — nothing else needs to
-// change. See tests/scoring.test.js for sample inputs/outputs.
+// change. See tests/scoring.test.js for sample inputs/outputs, including
+// realistic USDG-like and Agraris-like fixtures.
 
 export const SEVERITY = { INFO: "info", LOW: "low", MEDIUM: "medium", HIGH: "high" };
 
@@ -19,6 +22,15 @@ export const ZERO_ADDRESS = "0x" + "0".repeat(40);
 // standard like the zero address — just the most common one in practice.
 export const DEAD_ADDRESS = "0x" + "0".repeat(36) + "dead";
 export const BURN_ADDRESSES = [ZERO_ADDRESS, DEAD_ADDRESS];
+
+// Blockscout's Token schema documents `exchange_rate` (and the related
+// volume/market-cap fields) as USD-denominated — this is a platform-wide
+// convention, not something specific to this chain, but it could not be
+// re-confirmed against a live instance from this sandboxed environment
+// (see README's field-names note). Flip this off if that turns out to be
+// wrong for this deployment; every formatted amount is currency-agnostic
+// on its own, only the "$" prefix depends on this.
+export const MARKET_DATA_ASSUMED_CURRENCY = "USD";
 
 export const THRESHOLDS = {
   // Fewer than this many findings with actual data (excluding info-only
@@ -42,17 +54,19 @@ export const THRESHOLDS = {
     mediumBelow: 24 * 7,
   },
 
-  // Severity assigned to each owner-privilege category found in a
-  // verified contract's ABI. Not specified numerically by the product
-  // brief (unlike the checks above) — these are a reasonable starting
-  // point, tune freely.
+  // Severity assigned to each ABI-detected owner-privilege category in a
+  // verified contract. Not specified numerically by the product brief
+  // (unlike the checks above) — these are a reasonable starting point,
+  // tune freely. Proxy-upgrade severity is NOT in this table — it has its
+  // own rule (see scoreProxyUpgrade): unverified source is always High;
+  // verified source is Medium unless the upgrade admin is confirmed to be
+  // a plain wallet (not a contract), which raises it to High.
   ownerPrivilegeSeverity: {
     mint: SEVERITY.MEDIUM,
     pause: SEVERITY.MEDIUM,
     blacklist: SEVERITY.MEDIUM,
     fee: SEVERITY.MEDIUM,
     maxTxWallet: SEVERITY.LOW,
-    proxyUpgrade: SEVERITY.HIGH,
   },
 };
 
@@ -79,17 +93,68 @@ export function computeHolderPercentage(holderValueRaw, totalSupplyRaw) {
   return Number(scaled) / Number(PRECISION);
 }
 
+// --- Number formatting -----------------------------------------------------
+// Shared by finding text (below) and by app.js for the token details table,
+// so "thousands separators everywhere" stays consistent in one place.
+
 function formatPct(pct) {
   return (Math.round(pct * 10) / 10).toString();
 }
 
-function formatAge(ageHours) {
+// A whole-number count (e.g. a holder count) with thousands separators:
+// 365893 -> "365,893".
+export function formatCount(n) {
+  const num = Number(n);
+  return Number.isFinite(num) ? num.toLocaleString("en-US") : String(n);
+}
+
+// Adds thousands separators to a decimal string's integer part without
+// ever converting it to a JS Number — safe for arbitrarily large token
+// amounts that would lose precision as a float.
+// "1000000.5" -> "1,000,000.5"
+export function addThousandsSeparators(numStr) {
+  const str = String(numStr);
+  const negative = str.startsWith("-");
+  const unsigned = negative ? str.slice(1) : str;
+  const [intPart, fracPart] = unsigned.split(".");
+  const withCommas = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const result = fracPart !== undefined ? `${withCommas}.${fracPart}` : withCommas;
+  return negative ? `-${result}` : result;
+}
+
+// A price with "sensible" decimals: 2 for values >= 1, more for sub-1
+// values so small prices aren't rounded away to "0.00". Currency-agnostic
+// — callers prepend "$" (or nothing) themselves.
+export function formatPriceUsd(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value);
+  if (num === 0) return "0.00";
+  const abs = Math.abs(num);
+  const decimals = abs >= 1 ? 2 : Math.min(10, Math.max(2, -Math.floor(Math.log10(abs)) + 2));
+  return num.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+// Compact magnitude for large amounts (e.g. "867.6M", "3.24B") — used in
+// finding text; the details table shows the full value via formatPriceUsd
+// / addThousandsSeparators instead. Currency-agnostic, like formatPriceUsd.
+export function formatCompactUsd(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value);
+  const abs = Math.abs(num);
+  const sign = num < 0 ? "-" : "";
+  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(1)}M`;
+  if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(1)}K`;
+  return `${sign}${formatPriceUsd(abs)}`;
+}
+
+function formatAgePhrase(ageHours) {
   if (ageHours < 48) {
     const hours = Math.max(0, Math.round(ageHours));
-    return `Deployed ${hours} hour${hours === 1 ? "" : "s"} ago`;
+    return `${hours} hour${hours === 1 ? "" : "s"} ago`;
   }
   const days = Math.round(ageHours / 24);
-  return `Deployed ${days} day${days === 1 ? "" : "s"} ago`;
+  return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
 // --- Check 1: source verification ---------------------------------------
@@ -110,7 +175,7 @@ export function scoreVerification(isVerified) {
       severity: SEVERITY.HIGH,
       title: "Source code not verified",
       detail:
-        "The contract's source code has not been published/verified. The owner-privilege and ABI-based checks below cannot run, and the token's real behavior cannot be confirmed independently.",
+        "The contract's source code has not been published/verified. The ABI-based owner-privilege checks below cannot run, and the token's real behavior cannot be confirmed independently.",
     });
   }
   return finding({
@@ -123,7 +188,8 @@ export function scoreVerification(isVerified) {
 
 // --- Check 2: holder concentration ---------------------------------------
 
-// holders: array of { address, valueRaw } (raw base-unit balance strings),
+// holders: array of { address, valueRaw, isContract? } (raw base-unit
+// balance strings; isContract only if Blockscout tagged that address),
 // or null/undefined if unavailable. totalSupplyRaw: raw base-unit string.
 export function scoreHolderConcentration(holders, totalSupplyRaw, thresholds = THRESHOLDS) {
   const cfg = thresholds.holderConcentration;
@@ -152,34 +218,86 @@ export function scoreHolderConcentration(holders, totalSupplyRaw, thresholds = T
   try {
     ranked = holders
       .filter((h) => h && h.address && !isBurnOrZeroAddress(h.address))
-      .map((h) => ({ address: h.address, percentage: computeHolderPercentage(h.valueRaw, totalSupplyRaw) }))
+      .map((h) => ({
+        address: h.address,
+        percentage: computeHolderPercentage(h.valueRaw, totalSupplyRaw),
+        isContract: h.isContract,
+      }))
       .sort((a, b) => b.percentage - a.percentage);
   } catch {
     return unknown();
   }
 
-  const top1Pct = ranked[0]?.percentage ?? 0;
-  const top10Pct = ranked.slice(0, 10).reduce((sum, h) => sum + h.percentage, 0);
+  const top1 = ranked[0];
+  const top1Pct = top1?.percentage ?? 0;
+  const top10 = ranked.slice(0, 10);
+  const top10Pct = top10.reduce((sum, h) => sum + h.percentage, 0);
 
   const top1Severity =
     top1Pct > cfg.top1.highAbovePct ? SEVERITY.HIGH : top1Pct > cfg.top1.mediumAbovePct ? SEVERITY.MEDIUM : SEVERITY.INFO;
   const top10Severity = top10Pct > cfg.top10.mediumAbovePct ? SEVERITY.MEDIUM : SEVERITY.INFO;
 
-  const detail =
-    "A few wallets controlling a large share of supply increases the risk of coordinated selling, or a single large sell moving the price sharply. Zero and burn addresses are excluded from this ranking.";
+  // Only mentioned when Blockscout actually tagged the address as a
+  // contract — a pool/bridge/vault holding a large share reads very
+  // differently than a single wallet doing the same, but we only say so
+  // when the API told us, never as a guess.
+  const top1ContractNote =
+    top1 && top1.isContract === true
+      ? " The largest holder is tagged as a contract (e.g. a pool, bridge, or vault) by the block explorer, which is typically less concerning than the same share held by a single wallet."
+      : "";
+  const contractsInTop10 = top10.filter((h) => h.isContract === true).length;
+  const top10ContractNote =
+    contractsInTop10 > 0
+      ? ` ${contractsInTop10} of the top ${top10.length} holder${top10.length === 1 ? "" : "s"} ${contractsInTop10 === 1 ? "is" : "are"} tagged as a contract (e.g. a pool, bridge, or vault) by the block explorer, which is typically less concerning than the same share held by individual wallets.`
+      : "";
+
+  function top1Text(severity) {
+    if (severity === SEVERITY.HIGH) {
+      return {
+        qualifier: "high concentration",
+        detail: `A single wallet controls the majority of supply and could move the price sharply on its own.${top1ContractNote}`,
+      };
+    }
+    if (severity === SEVERITY.MEDIUM) {
+      return {
+        qualifier: "worth watching",
+        detail: `A single holder controls a meaningful share of supply — enough to move the price noticeably if it sold.${top1ContractNote}`,
+      };
+    }
+    return {
+      qualifier: "below the concern threshold",
+      detail: `No single wallet controls enough supply to move the price on its own.${top1ContractNote}`,
+    };
+  }
+
+  function top10Text(severity) {
+    if (severity === SEVERITY.MEDIUM) {
+      return {
+        qualifier: "concentrated among a few wallets",
+        detail: `A large share of supply sits with a handful of holders, raising the risk of coordinated selling.${top10ContractNote}`,
+      };
+    }
+    return {
+      qualifier: "well distributed",
+      detail: `Supply is spread across enough holders that no small group can easily move the price alone.${top10ContractNote}`,
+    };
+  }
+
+  const top1Info = top1Text(top1Severity);
+  const top10Info = top10Text(top10Severity);
 
   // top10 never reaches "high" (it only has a medium threshold), so the
   // only severity the two checks can genuinely share is "medium" — when
-  // that happens, show it as one finding instead of two saying the same
-  // thing twice. Two clean ("info") readings stay separate, since neither
-  // actually exceeded anything.
+  // that happens, show it as one finding instead of two saying almost the
+  // same thing twice. Two clean ("info") readings stay separate, since
+  // neither actually exceeded anything.
   if (top1Severity === top10Severity && top1Severity !== SEVERITY.INFO) {
     return [
       finding({
         id: "holder-concentration",
         severity: top1Severity,
-        title: `Top holder owns ${formatPct(top1Pct)}% of supply, top 10 hold ${formatPct(top10Pct)}%`,
-        detail,
+        title: `Largest holder owns ${formatPct(top1Pct)}% of supply, top 10 hold ${formatPct(top10Pct)}%: ${top1Info.qualifier}`,
+        detail: `${top1Info.detail} ${top10Info.detail}`.trim(),
       }),
     ];
   }
@@ -188,14 +306,14 @@ export function scoreHolderConcentration(holders, totalSupplyRaw, thresholds = T
     finding({
       id: "holder-top1",
       severity: top1Severity,
-      title: `Top holder owns ${formatPct(top1Pct)}% of supply`,
-      detail,
+      title: `Largest holder owns ${formatPct(top1Pct)}% of supply: ${top1Info.qualifier}`,
+      detail: top1Info.detail,
     }),
     finding({
       id: "holder-top10",
       severity: top10Severity,
-      title: `Top 10 holders own ${formatPct(top10Pct)}% of supply`,
-      detail,
+      title: `Top 10 holders own ${formatPct(top10Pct)}% of supply: ${top10Info.qualifier}`,
+      detail: top10Info.detail,
     }),
   ];
 }
@@ -215,11 +333,29 @@ export function scoreHolderCount(holdersCount, thresholds = THRESHOLDS) {
   const count = Number(holdersCount);
   const cfg = thresholds.holderCount;
   const severity = count < cfg.highBelow ? SEVERITY.HIGH : count < cfg.mediumBelow ? SEVERITY.MEDIUM : SEVERITY.INFO;
+  const countText = `${formatCount(count)} holder${count === 1 ? "" : "s"}`;
+
+  if (severity === SEVERITY.HIGH) {
+    return finding({
+      id: "holder-count",
+      severity,
+      title: `${countText}: very few holders`,
+      detail: "With this few holders, the token is thinly distributed and its price can be moved by a small number of wallets.",
+    });
+  }
+  if (severity === SEVERITY.MEDIUM) {
+    return finding({
+      id: "holder-count",
+      severity,
+      title: `${countText}: somewhat concentrated`,
+      detail: "A moderate number of holders — still thin enough that a few large wallets can meaningfully affect the price.",
+    });
+  }
   return finding({
     id: "holder-count",
     severity,
-    title: `${count} holder${count === 1 ? "" : "s"}`,
-    detail: "Very few holders means the token is thinly distributed and its price can be moved by a small number of wallets.",
+    title: `${countText}: wide distribution`,
+    detail: "Enough independent holders that no small group is likely to dominate trading on its own.",
   });
 }
 
@@ -245,18 +381,81 @@ export function scoreTokenAge(createdAtIso, now = new Date(), thresholds = THRES
       detail: "The contract creation timestamp could not be parsed.",
     });
   }
-  const ageHours = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60);
+  const ageHours = Math.max(0, (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60));
   const cfg = thresholds.tokenAgeHours;
   const severity = ageHours < cfg.highBelow ? SEVERITY.HIGH : ageHours < cfg.mediumBelow ? SEVERITY.MEDIUM : SEVERITY.INFO;
+  const ageText = formatAgePhrase(ageHours);
+
+  if (severity === SEVERITY.HIGH) {
+    return finding({
+      id: "token-age",
+      severity,
+      title: `Deployed ${ageText}: very new`,
+      detail: "Extremely new tokens have had almost no time for problems (or scams) to surface before people buy in.",
+    });
+  }
+  if (severity === SEVERITY.MEDIUM) {
+    return finding({
+      id: "token-age",
+      severity,
+      title: `Deployed ${ageText}: relatively new`,
+      detail: "Still early — there hasn't been much time for the token's real behavior to be observed.",
+    });
+  }
   return finding({
     id: "token-age",
     severity,
-    title: formatAge(Math.max(0, ageHours)),
-    detail: "Newly deployed tokens have a short track record, giving scammers less time to be caught before people buy in.",
+    title: `Deployed ${ageText}: established`,
+    detail: "The token has been live long enough that major problems would likely have already surfaced.",
   });
 }
 
-// --- Check 5: owner privileges (verified contracts only) -------------------
+// --- Check 5a: proxy upgrade (independent of verification) -----------------
+
+// An upgradeable proxy is detectable (via `proxy_type`, or an `upgradeTo`
+// -style function in a verified ABI) whether or not the source is
+// verified, so this runs on its own rather than being gated behind
+// verification like the rest of check 5.
+//
+//   - Unverified source: always High — there's no way to independently
+//     confirm what upgraded logic would do.
+//   - Verified source: Medium by default (common for regulated/compliant
+//     tokens — the owner/admin can change the logic, but at least you can
+//     read the current one). Raised to High only when the upgrade admin
+//     is *confirmed* to be a plain wallet address rather than a contract
+//     (e.g. a multisig or timelock) — a single point of control with no
+//     on-chain checks. Never raised on a guess: if admin-contract status
+//     is unknown, it stays Medium.
+export function scoreProxyUpgrade({ isProxy, isVerified, proxyAdmin, proxyAdminIsContract }) {
+  if (isProxy !== true) return null;
+
+  const verified = isVerified === true;
+  const adminConfirmedWallet = Boolean(proxyAdmin) && proxyAdminIsContract === false;
+
+  const reason = !verified ? "unverified" : adminConfirmedWallet ? "wallet-admin" : "verified";
+  const severity = reason === "verified" ? SEVERITY.MEDIUM : SEVERITY.HIGH;
+
+  const adminClause = proxyAdmin
+    ? ` The upgrade admin is ${proxyAdmin}${
+        proxyAdminIsContract === true ? " (a contract)" : proxyAdminIsContract === false ? " (a plain wallet address)" : ""
+      }.`
+    : "";
+
+  const detailByReason = {
+    unverified: `This is an upgradeable proxy and the source code is not verified, so its logic can be changed by whoever controls upgrades with no way to independently confirm what the new logic would do.${adminClause}`,
+    "wallet-admin": `This is an upgradeable proxy controlled by a plain wallet address rather than a contract (e.g. a multisig or timelock) — a single point of control with no on-chain checks on upgrades.${adminClause}`,
+    verified: `The owner/admin can change this contract's logic at any time. This is common for regulated or compliance-driven tokens, but you must trust whoever controls upgrades.${adminClause}`,
+  };
+
+  return finding({
+    id: "owner-privilege-proxyUpgrade",
+    severity,
+    title: "Owner can upgrade the contract's logic",
+    detail: detailByReason[reason],
+  });
+}
+
+// --- Check 5b: ABI-detected owner privileges (verified contracts only) -----
 
 const PRIVILEGE_PATTERNS = [
   { key: "mint", label: "mint new tokens", pattern: /mint/i },
@@ -264,8 +463,9 @@ const PRIVILEGE_PATTERNS = [
   { key: "blacklist", label: "blacklist/blocklist addresses", pattern: /black.?list|block.?list/i },
   { key: "fee", label: "change fees/taxes", pattern: /^set.*(fee|tax)/i },
   { key: "maxTxWallet", label: "restrict max transaction/wallet size", pattern: /^set.*max.*(tx|wallet|transaction)/i },
-  { key: "proxyUpgrade", label: "upgrade the contract's logic", pattern: /^upgradeto/i },
 ];
+
+const UPGRADE_FUNCTION_PATTERN = /^upgradeto/i;
 
 const PRIVILEGE_DETAIL = {
   mint: "The owner can call a mint function to create new tokens, which can dilute existing holders and crash the price.",
@@ -273,18 +473,25 @@ const PRIVILEGE_DETAIL = {
   blacklist: "The owner can block specific addresses from transferring or trading the token.",
   fee: "The owner can change transfer fees or taxes, potentially up to a level that makes selling impractical.",
   maxTxWallet: "The owner can limit how much can be transacted or held per wallet, which can be used to restrict trading unfairly.",
-  proxyUpgrade:
-    "This contract's code can be replaced by the owner at any time (it's an upgradeable proxy), which can change its behavior entirely — including everything else checked here.",
 };
 
-// Pure ABI inspection: returns which privilege categories were found, and
-// which function names matched each one. Name-based only — not a bytecode
-// or semantics audit.
-export function detectOwnerPrivileges(abi, isProxy) {
-  const functionNames = Array.isArray(abi)
+function abiFunctionNames(abi) {
+  return Array.isArray(abi)
     ? abi.filter((entry) => entry && entry.type === "function" && typeof entry.name === "string").map((entry) => entry.name)
     : [];
+}
 
+// True if the ABI itself looks like a proxy (has an upgradeTo-style
+// function) — used as a fallback signal when Blockscout's `proxy_type`
+// field isn't set but the verified source makes it obvious anyway.
+export function abiLooksLikeProxy(abi) {
+  return abiFunctionNames(abi).some((name) => UPGRADE_FUNCTION_PATTERN.test(name));
+}
+
+// Pure ABI inspection for the non-proxy privilege categories (mint, pause,
+// etc.) — name-based only, not a bytecode or semantics audit.
+export function detectAbiPrivileges(abi) {
+  const functionNames = abiFunctionNames(abi);
   const detected = [];
   for (const { key, label, pattern } of PRIVILEGE_PATTERNS) {
     const functions = functionNames.filter((name) => pattern.test(name));
@@ -292,49 +499,58 @@ export function detectOwnerPrivileges(abi, isProxy) {
       detected.push({ key, label, functions });
     }
   }
-
-  if (isProxy && !detected.some((d) => d.key === "proxyUpgrade")) {
-    detected.push({ key: "proxyUpgrade", label: "upgrade the contract's logic", functions: [] });
-  }
-
   return detected;
 }
 
-export function scoreOwnerPrivileges({ isVerified, abi, isProxy }, thresholds = THRESHOLDS) {
-  if (!isVerified || !Array.isArray(abi)) {
-    return [
+export function scoreOwnerPrivileges(facts, thresholds = THRESHOLDS) {
+  const { isVerified, abi, isProxy, proxyAdmin, proxyAdminIsContract } = facts;
+  const hasVerifiedAbi = isVerified === true && Array.isArray(abi);
+  const effectiveIsProxy = isProxy === true || (hasVerifiedAbi && abiLooksLikeProxy(abi));
+
+  const findings = [];
+
+  const proxyFinding = scoreProxyUpgrade({ isProxy: effectiveIsProxy, isVerified, proxyAdmin, proxyAdminIsContract });
+  if (proxyFinding) findings.push(proxyFinding);
+
+  if (hasVerifiedAbi) {
+    for (const d of detectAbiPrivileges(abi)) {
+      findings.push(
+        finding({
+          id: `owner-privilege-${d.key}`,
+          severity: thresholds.ownerPrivilegeSeverity[d.key] ?? SEVERITY.MEDIUM,
+          title: `Owner can ${d.label}`,
+          detail: PRIVILEGE_DETAIL[d.key] ?? `The ABI includes a "${d.key}"-style function.`,
+        }),
+      );
+    }
+  } else {
+    findings.push(
       finding({
-        id: "owner-privileges",
+        id: "owner-privileges-abi",
         known: false,
         severity: SEVERITY.INFO,
         title: "Owner privileges unknown",
-        detail: "This check requires verified source code with a readable ABI, which is not available for this contract.",
+        detail:
+          "Detecting mint, pause, blacklist, fee-changing, and max-transaction functions requires verified source code with a readable ABI, which is not available for this contract.",
       }),
-    ];
+    );
   }
 
-  const detected = detectOwnerPrivileges(abi, isProxy);
-
-  if (detected.length === 0) {
+  if (findings.length === 0) {
+    // Only reachable when the ABI was readable and nothing — including a
+    // proxy — was detected.
     return [
       finding({
         id: "owner-privileges",
         severity: SEVERITY.INFO,
         title: "No elevated owner privileges detected",
         detail:
-          "No mint, pause, blacklist, fee-changing, max-transaction, or upgrade functions were found by name in the verified ABI. This is a name-based check, not a full audit — privileges can still exist under different names.",
+          "No mint, pause, blacklist, fee-changing, or max-transaction functions were found by name in the verified ABI, and this isn't an upgradeable proxy. This is a name-based check, not a full audit — privileges can still exist under different names.",
       }),
     ];
   }
 
-  return detected.map((d) =>
-    finding({
-      id: `owner-privilege-${d.key}`,
-      severity: thresholds.ownerPrivilegeSeverity[d.key] ?? SEVERITY.MEDIUM,
-      title: `Owner can ${d.label}`,
-      detail: PRIVILEGE_DETAIL[d.key] ?? `The ABI includes a "${d.key}"-style function.`,
-    }),
-  );
+  return findings;
 }
 
 // --- Check 6: owner status --------------------------------------------------
@@ -364,13 +580,18 @@ export function scoreOwnerStatus(owner) {
 
 export function scoreMarketData({ priceUsd, volume24hUsd, marketCapUsd } = {}) {
   const known = priceUsd != null || volume24hUsd != null || marketCapUsd != null;
+  // See MARKET_DATA_ASSUMED_CURRENCY above for why "$" is used here.
+  const prefix = MARKET_DATA_ASSUMED_CURRENCY === "USD" ? "$" : "";
+  const priceText = priceUsd != null ? `${prefix}${formatPriceUsd(priceUsd)}` : "Unknown";
+  const volumeText = volume24hUsd != null ? `${prefix}${formatCompactUsd(volume24hUsd)}` : "Unknown";
+  const marketCapText = marketCapUsd != null ? `${prefix}${formatCompactUsd(marketCapUsd)}` : "Unknown";
   return finding({
     id: "market-data",
     severity: SEVERITY.INFO,
     known,
     countsTowardLevel: false,
     title: known ? "Market data available" : "Market data unknown",
-    detail: `Price: ${priceUsd ?? "Unknown"} · 24h volume: ${volume24hUsd ?? "Unknown"} · Market cap: ${marketCapUsd ?? "Unknown"}`,
+    detail: `Price: ${priceText} · 24h volume: ${volumeText} · Market cap: ${marketCapText}`,
   });
 }
 
@@ -397,7 +618,16 @@ export function scoreToken(facts, thresholds = THRESHOLDS) {
     ...scoreHolderConcentration(facts.holders, facts.totalSupplyRaw, thresholds),
     scoreHolderCount(facts.holdersCount, thresholds),
     scoreTokenAge(facts.createdAtIso, facts.now ?? new Date(), thresholds),
-    ...scoreOwnerPrivileges({ isVerified: facts.isVerified, abi: facts.abi, isProxy: facts.isProxy }, thresholds),
+    ...scoreOwnerPrivileges(
+      {
+        isVerified: facts.isVerified,
+        abi: facts.abi,
+        isProxy: facts.isProxy,
+        proxyAdmin: facts.proxyAdmin,
+        proxyAdminIsContract: facts.proxyAdminIsContract,
+      },
+      thresholds,
+    ),
     scoreOwnerStatus(facts.owner),
     scoreMarketData(facts.marketData ?? {}),
   ];
