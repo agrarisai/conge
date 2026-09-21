@@ -201,6 +201,10 @@ app.js               # app logic (ES module, imports viem + scoring.js)
 scoring.js           # Risk Score v1 — pure, rule-based scoring functions
 tests/scoring.test.js  # unit tests for scoring.js (node --test)
 assets/              # brand imagery — see "Branding assets" below
+worker/              # optional Cloudflare Worker RPC proxy — see "Worker" below
+  index.js             # the Worker itself (single file, no dependencies)
+  README.md            # deploy steps, /health, rate limiting
+  tests/worker.test.js # unit tests for its validation/CORS logic (node --test)
 ```
 
 ## Local setup
@@ -388,12 +392,50 @@ unaccountable third party:
    limiting. Cons: it's infrastructure this project now owns and must
    keep running/secure; it should only ever proxy read calls and never
    accept or forward private keys/signatures (this site doesn't use them,
-   and the proxy shouldn't either).
+   and the proxy shouldn't either). **This option is now implemented** —
+   see [Worker](#worker) below — but as an RPC proxy specifically, not a
+   Blockscout API proxy; if Blockscout itself ever turns out to block
+   browser origins, the same pattern (a Worker forwarding to Blockscout
+   with CORS headers added) would need to be built separately.
 
-This PR does not implement either option, since Blockscout CORS support
-couldn't be verified from this environment (see the note above) — if the
-`curl` check confirms Blockscout also blocks browser origins, come back to
-this list.
+This section otherwise does not implement option 1, since Blockscout CORS
+support couldn't be verified from this environment (see the note above) —
+if the `curl` check confirms Blockscout also blocks browser origins, come
+back to this list.
+
+## Worker
+
+[`worker/`](./worker) holds a small, dependency-free Cloudflare Worker
+(`worker/index.js`, a single file) that proxies read-only JSON-RPC calls
+to `rpc.mainnet.chain.robinhood.com` — the RPC endpoint this site
+otherwise talks to directly as the optional secondary source (see
+[Troubleshooting network connectivity](#troubleshooting-network-connectivity)
+above for why that endpoint can fail from some networks). It:
+
+- only forwards `eth_chainId`, `eth_blockNumber`, `eth_call`, and
+  `eth_getCode`, all restricted to the `"latest"` block (no historical
+  reads, nothing that could write or sign);
+- validates addresses/call data as hex before forwarding;
+- only accepts requests from `https://agrarisai.github.io` (no wildcard
+  CORS);
+- times out upstream calls after 8s and reports `502` with a real reason
+  if the upstream fails, rather than hanging;
+- exposes `GET /health` as a one-tap, no-CORS diagnostic you can open
+  directly in a phone browser to check whether the upstream RPC is
+  reachable right now;
+- holds no secrets and no state (no KV, no D1) and never logs request
+  bodies.
+
+See [`worker/README.md`](./worker/README.md) for how to deploy it via the
+Cloudflare dashboard (no CLI needed) and how to read `/health`. Its pure
+validation/CORS logic has its own unit tests, runnable with
+`node --test worker/tests/worker.test.js`.
+
+**This Worker is not yet wired into `app.js`.** Its URL depends on the
+Cloudflare account/subdomain it's deployed under, which this repo can't
+know in advance — once deployed, add its URL to `CONFIG.rpcUrls` in
+`app.js` (see [Tech](#tech) above) to actually start using it as the RPC
+secondary source, the same way any other RPC URL is added there.
 
 ## Security notes
 

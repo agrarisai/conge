@@ -161,6 +161,18 @@ test("scoreHolderConcentration: top10 > 80% is medium", () => {
   assert.equal(top10.severity, SEVERITY.MEDIUM);
 });
 
+test("scoreHolderConcentration: top10 just under the concern threshold (50.1%) is not called 'well distributed'", () => {
+  // A single holder at 50.1% is deliberately unrealistic for a *real*
+  // top-10 spread, but it's the simplest way to land just under the 80%
+  // threshold and pin the exact wording for that boundary.
+  const holders = [{ address: "0x1111111111111111111111111111111111111a", valueRaw: "501" }];
+  const [, top10] = scoreHolderConcentration(holders, "1000");
+  assert.equal(top10.severity, SEVERITY.INFO);
+  assert.equal(top10.title, "Top 10 holders own 50.1% of supply: below the concern threshold");
+  assert.doesNotMatch(top10.title, /well distributed/);
+  assert.doesNotMatch(top10.detail, /well distributed/);
+});
+
 test("scoreHolderConcentration: merges top1 and top10 into one finding when both are medium", () => {
   const holders = [
     { address: "0x1111111111111111111111111111111111111a", valueRaw: "300" },
