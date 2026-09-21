@@ -384,6 +384,7 @@ const addressErrorEl = document.getElementById("address-error");
 const scanButton = document.getElementById("scan-button");
 const scanErrorEl = document.getElementById("scan-error");
 const scanResultEl = document.getElementById("scan-result");
+const scanResultTitleEl = document.getElementById("scan-result-title");
 const scanTechDetailsEl = document.getElementById("scan-tech-details");
 const scanTechDetailsContentEl = document.getElementById("scan-tech-details-content");
 
@@ -411,6 +412,7 @@ function resetScanUI() {
   scanResultEl.hidden = true;
   scanTechDetailsEl.hidden = true;
   riskFindingsEl.innerHTML = "";
+  scanResultTitleEl.textContent = "Token";
 }
 
 // Best-effort owner() read over the optional RPC secondary. Blockscout
@@ -521,7 +523,7 @@ async function scanToken(rawAddress) {
 
     if (isContract === false) {
       scanErrorEl.textContent =
-        "This address has no contract code (per the Blockscout API). It looks like a regular wallet address, not a token contract.";
+        "This is a wallet address, not a token contract — it has no contract code on-chain, so there's nothing to scan. Double-check you copied the token's contract address rather than a wallet address.";
       scanErrorEl.hidden = false;
       showTechDetailsIfNeeded();
       return;
@@ -577,6 +579,8 @@ async function scanToken(rawAddress) {
       },
     });
     renderRiskSummary(overallLevel, findings);
+
+    scanResultTitleEl.textContent = name && symbol ? `${name} (${symbol})` : name || (symbol ? `(${symbol})` : "Token");
 
     resultAddressEl.textContent = address;
     resultIsContractEl.textContent = isContract === null ? UNAVAILABLE : isContract ? "Yes" : "No";

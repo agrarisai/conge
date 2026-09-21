@@ -165,20 +165,37 @@ export function scoreHolderConcentration(holders, totalSupplyRaw, thresholds = T
     top1Pct > cfg.top1.highAbovePct ? SEVERITY.HIGH : top1Pct > cfg.top1.mediumAbovePct ? SEVERITY.MEDIUM : SEVERITY.INFO;
   const top10Severity = top10Pct > cfg.top10.mediumAbovePct ? SEVERITY.MEDIUM : SEVERITY.INFO;
 
+  const detail =
+    "A few wallets controlling a large share of supply increases the risk of coordinated selling, or a single large sell moving the price sharply. Zero and burn addresses are excluded from this ranking.";
+
+  // top10 never reaches "high" (it only has a medium threshold), so the
+  // only severity the two checks can genuinely share is "medium" — when
+  // that happens, show it as one finding instead of two saying the same
+  // thing twice. Two clean ("info") readings stay separate, since neither
+  // actually exceeded anything.
+  if (top1Severity === top10Severity && top1Severity !== SEVERITY.INFO) {
+    return [
+      finding({
+        id: "holder-concentration",
+        severity: top1Severity,
+        title: `Top holder owns ${formatPct(top1Pct)}% of supply, top 10 hold ${formatPct(top10Pct)}%`,
+        detail,
+      }),
+    ];
+  }
+
   return [
     finding({
       id: "holder-top1",
       severity: top1Severity,
       title: `Top holder owns ${formatPct(top1Pct)}% of supply`,
-      detail:
-        "A single wallet controlling a large share of supply can move the price sharply on its own. Zero and burn addresses are excluded from this ranking.",
+      detail,
     }),
     finding({
       id: "holder-top10",
       severity: top10Severity,
       title: `Top 10 holders own ${formatPct(top10Pct)}% of supply`,
-      detail:
-        "Heavy concentration among a handful of wallets increases the risk of coordinated selling. Zero and burn addresses are excluded from this ranking.",
+      detail,
     }),
   ];
 }
@@ -329,7 +346,7 @@ export function scoreOwnerStatus(owner) {
       known: false,
       severity: SEVERITY.INFO,
       title: "Owner unknown",
-      detail: "The contract owner could not be read (requires the optional RPC secondary source and an owner() function).",
+      detail: "The owner could not be read for this contract.",
     });
   }
   const renounced = owner.toLowerCase() === ZERO_ADDRESS;
