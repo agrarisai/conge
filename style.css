@@ -305,7 +305,7 @@ input[type="text"]:focus {
   color: var(--color-muted);
 }
 
-.risk-finding-info { background-color: var(--risk-info-bg); border-left-color: var(--risk-info-text); }
+.risk-finding-passed { background-color: var(--risk-info-bg); border-left-color: var(--risk-info-text); }
 .risk-finding-low { background-color: var(--risk-low-bg); border-left-color: var(--risk-low-text); }
 .risk-finding-medium { background-color: var(--risk-medium-bg); border-left-color: var(--risk-medium-text); }
 .risk-finding-high { background-color: var(--risk-high-bg); border-left-color: var(--risk-high-text); }

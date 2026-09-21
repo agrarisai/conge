@@ -7,7 +7,14 @@ import {
   formatUnits,
 } from "https://esm.sh/viem@2.21.19";
 
-import { scoreToken, SEVERITY_ORDER } from "./scoring.js";
+import {
+  scoreToken,
+  addThousandsSeparators,
+  formatCount,
+  formatPriceUsd,
+  formatCompactUsd,
+  MARKET_DATA_ASSUMED_CURRENCY,
+} from "./scoring.js";
 
 // Single source of truth for chain/explorer/RPC configuration.
 //
@@ -400,11 +407,25 @@ const resultTotalSupplyEl = document.getElementById("result-total-supply");
 const resultHoldersEl = document.getElementById("result-holders");
 const resultVerifiedEl = document.getElementById("result-verified");
 const resultOwnerEl = document.getElementById("result-owner");
+const resultPriceEl = document.getElementById("result-price");
+const resultVolumeEl = document.getElementById("result-volume");
+const resultMarketCapEl = document.getElementById("result-market-cap");
 const resultSourceEl = document.getElementById("result-source");
 
 const UNAVAILABLE = "Unavailable";
 
-const SEVERITY_GROUP_LABEL = { high: "High risk", medium: "Medium risk", low: "Low risk", info: "Info" };
+// Findings are grouped by outcome, not just severity: a check that
+// genuinely passed ("info" severity, known data) reads very differently
+// from a check whose data simply wasn't available ("Unknown") — grouping
+// them together would make Unknown look like a clean bill of health,
+// which it isn't.
+const GROUP_ORDER = ["high", "medium", "low", "passed", "unknown"];
+const GROUP_LABEL = { high: "High risk", medium: "Medium risk", low: "Low risk", passed: "Passed", unknown: "Info / unknown" };
+
+function groupKeyFor(finding) {
+  if (finding.known === false) return "unknown";
+  return finding.severity === "info" ? "passed" : finding.severity;
+}
 
 function resetScanUI() {
   addressErrorEl.hidden = true;
@@ -430,28 +451,29 @@ function isBenignNotFound(result) {
 }
 
 // Renders the Risk Score v1 summary: an overall-level badge, the fixed
-// disclaimer, then findings grouped by severity (highest first). Built
-// with createElement/textContent only — nothing here is ever inserted as
-// HTML, since finding text can echo Blockscout/RPC data.
+// disclaimer, then findings grouped by outcome (High/Medium/Low risk,
+// then Passed, then Info / unknown — see groupKeyFor). Built with
+// createElement/textContent only — nothing here is ever inserted as HTML,
+// since finding text can echo Blockscout/RPC data.
 function renderRiskSummary(overallLevel, findings) {
   riskLevelValueEl.textContent = overallLevel;
   riskLevelValueEl.className = `risk-level-value risk-level-${overallLevel.toLowerCase().replace(/\s+/g, "-")}`;
 
   riskFindingsEl.innerHTML = "";
-  for (const severity of SEVERITY_ORDER) {
-    const group = findings.filter((f) => f.severity === severity);
+  for (const groupKey of GROUP_ORDER) {
+    const group = findings.filter((f) => groupKeyFor(f) === groupKey);
     if (group.length === 0) continue;
 
     const section = document.createElement("div");
     section.className = "risk-findings-group";
 
     const heading = document.createElement("h4");
-    heading.textContent = `${SEVERITY_GROUP_LABEL[severity]} (${group.length})`;
+    heading.textContent = `${GROUP_LABEL[groupKey]} (${group.length})`;
     section.appendChild(heading);
 
     for (const f of group) {
       const item = document.createElement("div");
-      item.className = f.known === false ? "risk-finding risk-finding-unknown" : `risk-finding risk-finding-${severity}`;
+      item.className = `risk-finding risk-finding-${groupKey}`;
 
       const title = document.createElement("p");
       title.className = "risk-finding-title";
@@ -502,7 +524,28 @@ async function scanToken(rawAddress) {
       ? await fetchBlockscout(`/transactions/${creationTxHash}`, `${BLOCKSCOUT_SOURCE} — GET /transactions/{hash}`)
       : null;
 
-    const allResults = [addressResult, tokenResult, contractResult, holdersResult, ...(txResult ? [txResult] : [])];
+    // Blockscout's proxy admin field name is unconfirmed from this
+    // environment (see README) — this is a best-effort guess with a
+    // graceful no-op fallback: if the field isn't there (likely), the
+    // proxy-upgrade check simply falls back to its verified/unverified
+    // rule without ever fabricating an admin-type escalation.
+    const proxyAdmin = contractResult.ok ? (contractResult.body.proxy_admin ?? contractResult.body.admin ?? null) : null;
+    const proxyAdminResult = proxyAdmin
+      ? await fetchBlockscout(`/addresses/${proxyAdmin}`, `${BLOCKSCOUT_SOURCE} — GET /addresses/{proxy_admin}`)
+      : null;
+    const proxyAdminIsContract =
+      proxyAdminResult?.ok && typeof proxyAdminResult.body.is_contract === "boolean"
+        ? proxyAdminResult.body.is_contract
+        : undefined;
+
+    const allResults = [
+      addressResult,
+      tokenResult,
+      contractResult,
+      holdersResult,
+      ...(txResult ? [txResult] : []),
+      ...(proxyAdminResult ? [proxyAdminResult] : []),
+    ];
 
     // 404 on everything but /addresses is an expected, valid answer ("not
     // a token" / "not verified" / "no holder data"), not a failure.
@@ -552,31 +595,42 @@ async function scanToken(rawAddress) {
 
     const holders = holdersResult.ok && Array.isArray(holdersResult.body.items)
       ? holdersResult.body.items
-          .map((item) => ({ address: item.address?.hash ?? item.address, valueRaw: item.value }))
+          .map((item) => ({
+            address: item.address?.hash ?? item.address,
+            valueRaw: item.value,
+            isContract: typeof item.address?.is_contract === "boolean" ? item.address.is_contract : undefined,
+          }))
           .filter((h) => typeof h.address === "string" && typeof h.valueRaw === "string")
       : null;
 
     const abi = contractResult.ok && Array.isArray(contractResult.body.abi) ? contractResult.body.abi : null;
-    const isProxy = Boolean(
-      (contractResult.ok && contractResult.body.proxy_type) || (addressResult.ok && addressResult.body.proxy_type),
-    );
+    // Three-way like isVerified above: trust an explicit true/false from
+    // whichever endpoint actually answered, and only fall back to
+    // "unknown" (null) when neither did.
+    const isProxy = contractResult.ok
+      ? Boolean(contractResult.body.proxy_type)
+      : addressResult.ok
+        ? Boolean(addressResult.body.proxy_type)
+        : null;
 
     const createdAtIso = txResult?.ok ? (txResult.body.timestamp ?? null) : null;
+
+    const priceUsd = tokenBody?.exchange_rate ?? null;
+    const volume24hUsd = tokenBody?.volume_24h ?? null;
+    const marketCapUsd = tokenBody?.circulating_market_cap ?? null;
 
     const { overallLevel, findings } = scoreToken({
       isVerified,
       abi,
       isProxy,
+      proxyAdmin,
+      proxyAdminIsContract,
       holders,
       totalSupplyRaw,
       holdersCount,
       createdAtIso,
       owner,
-      marketData: {
-        priceUsd: tokenBody?.exchange_rate ?? null,
-        volume24hUsd: tokenBody?.volume_24h ?? null,
-        marketCapUsd: tokenBody?.circulating_market_cap ?? null,
-      },
+      marketData: { priceUsd, volume24hUsd, marketCapUsd },
     });
     renderRiskSummary(overallLevel, findings);
 
@@ -591,18 +645,28 @@ async function scanToken(rawAddress) {
     if (totalSupplyRaw === null) {
       resultTotalSupplyEl.textContent = isBenignNotFound(tokenResult) ? "Unavailable (not a recognized token)" : UNAVAILABLE;
     } else if (decimals === null) {
-      resultTotalSupplyEl.textContent = `${totalSupplyRaw} (raw units — decimals unavailable)`;
+      resultTotalSupplyEl.textContent = `${addThousandsSeparators(totalSupplyRaw)} (raw units — decimals unavailable)`;
     } else {
       try {
-        resultTotalSupplyEl.textContent = formatUnits(BigInt(totalSupplyRaw), decimals);
+        resultTotalSupplyEl.textContent = addThousandsSeparators(formatUnits(BigInt(totalSupplyRaw), decimals));
       } catch {
-        resultTotalSupplyEl.textContent = `${totalSupplyRaw} (raw units)`;
+        resultTotalSupplyEl.textContent = `${addThousandsSeparators(totalSupplyRaw)} (raw units)`;
       }
     }
 
-    resultHoldersEl.textContent = holdersCount === null ? UNAVAILABLE : String(holdersCount);
+    resultHoldersEl.textContent = holdersCount === null ? UNAVAILABLE : formatCount(holdersCount);
     resultVerifiedEl.textContent = isVerified === null ? UNAVAILABLE : isVerified ? "Yes" : "No";
     resultOwnerEl.textContent = owner ? `${owner} (via RPC secondary)` : UNAVAILABLE;
+
+    // Full-precision values here (vs. the compact $867.6M-style figures in
+    // the risk finding above) — see MARKET_DATA_ASSUMED_CURRENCY for why
+    // "$" is shown.
+    const currencyPrefix = MARKET_DATA_ASSUMED_CURRENCY === "USD" ? "$" : "";
+    resultPriceEl.textContent = priceUsd != null ? `${currencyPrefix}${formatPriceUsd(priceUsd)}` : UNAVAILABLE;
+    resultVolumeEl.textContent =
+      volume24hUsd != null ? `${currencyPrefix}${addThousandsSeparators(formatPriceUsd(volume24hUsd))}` : UNAVAILABLE;
+    resultMarketCapEl.textContent =
+      marketCapUsd != null ? `${currencyPrefix}${addThousandsSeparators(formatPriceUsd(marketCapUsd))}` : UNAVAILABLE;
 
     resultSourceEl.textContent = owner ? `${BLOCKSCOUT_SOURCE} + RPC (secondary, owner)` : BLOCKSCOUT_SOURCE;
 

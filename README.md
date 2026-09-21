@@ -67,10 +67,18 @@ checks, each producing one or more **findings** — a severity
 (`info` / `low` / `medium` / `high`), a one-line title, and a short
 "why it matters" explanation. Findings are transparent and rule-based:
 no model, no hidden scoring, no weighting you can't read in
-[`scoring.js`](./scoring.js). If a check's data isn't available, its
-finding is marked **Unknown** (shown with a distinct dashed/gray style)
-— Unknown is never counted as a pass, and never contributes evidence
-toward a "Low" verdict.
+[`scoring.js`](./scoring.js). **Each finding's text is specific to its
+outcome** — a check that passed never shows a warning explanation, and
+vice versa (e.g. `"365,893 holders: wide distribution"` vs. `"2 holders:
+very few holders"`, with entirely different "why it matters" text, not
+just a different color on the same sentence).
+
+Findings are grouped in the UI by outcome, in this order: **High risk**,
+**Medium risk**, **Low risk**, **Passed** (a check ran and came back
+clean — calm, neutral styling, not the brand green), then **Info /
+unknown** (the check's data simply wasn't available). Unknown is never
+grouped with Passed and never counted as a pass — it's excluded from the
+overall-level math entirely.
 
 The **overall level** — `Low` / `Medium` / `High` / `Insufficient data`
 — is the worst known severity among the level-relevant findings (market
@@ -82,22 +90,47 @@ independently."*
 
 | # | Check | Data source | Thresholds |
 |---|-------|--------------|------------|
-| 1 | Source code verified | Blockscout `is_verified` | Unverified → **High**; also blocks checks 5 (owner privileges) |
-| 2 | Holder concentration (top 1 / top 10) | Blockscout `GET /tokens/{address}/holders`, zero/burn addresses excluded | Top 1 **>50% High**, **>20% Medium**; Top 10 **>80% Medium**. Shown as one finding with both percentages when top 1 and top 10 land on the same (Medium) severity — otherwise as two |
+| 1 | Source code verified | Blockscout `is_verified` | Unverified → **High**; also blocks check 5b (ABI-detected privileges) |
+| 2 | Holder concentration (top 1 / top 10) | Blockscout `GET /tokens/{address}/holders`, zero/burn addresses excluded | Top 1 **>50% High**, **>20% Medium**; Top 10 **>80% Medium**. Shown as one finding with both percentages when top 1 and top 10 land on the same (Medium) severity — otherwise as two. If Blockscout tags a top holder's address as a contract (`address.is_contract`), the finding says so — a pool/bridge/vault holding a large share reads differently than a single wallet doing the same |
 | 3 | Holder count | Blockscout `holders_count` | **<10 High**, **<100 Medium** |
 | 4 | Token age | Creation tx timestamp (`GET /transactions/{hash}`) | **<24h High**, **<7 days Medium** |
-| 5 | Owner privileges (verified contracts only) | ABI from `GET /smart-contracts/{address}` — name-matched for mint / pause / blacklist·blocklist / setFee·setTax / setMaxTx·setMaxWallet / upgradeTo, plus `proxy_type` | Each detected privilege listed as its own finding (severities in `THRESHOLDS.ownerPrivilegeSeverity`, tune freely — proxy upgrade defaults to High, most others Medium) |
+| 5a | Proxy upgrade (independent of verification — see below) | `proxy_type` (or an `upgradeTo`-style function in a verified ABI) | **Unverified source: High.** Verified source: **Medium** by default (common for regulated/compliant tokens), raised to **High** only if the upgrade admin is *confirmed* to be a plain wallet rather than a contract |
+| 5b | Other owner privileges (verified contracts only) | ABI from `GET /smart-contracts/{address}` — name-matched for mint / pause / blacklist·blocklist / setFee·setTax / setMaxTx·setMaxWallet | Each detected privilege is its own finding (severities in `THRESHOLDS.ownerPrivilegeSeverity`, tune freely — mostly Medium, max-tx/wallet is Low) |
 | 6 | Owner status | RPC secondary `owner()` read | Informational: shows the owner, or "Ownership renounced" if it's the zero address |
 | 7 | Market data | Blockscout `exchange_rate` / `volume_24h` / `circulating_market_cap` | Informational only — shown but never affects the overall level |
 
+**Check 5a (proxy upgrade) in detail**, since it's the one check with a
+conditional severity rule rather than a fixed threshold: being an
+upgradeable proxy is detectable whether or not the source is verified
+(via `proxy_type`, or an ABI `upgradeTo`-style function once verified),
+so it runs independently of check 5b rather than being gated behind
+verification like the rest of check 5. An unverified proxy is always
+**High** — there's no way to independently confirm what upgraded logic
+would do. A verified proxy is **Medium** by default: the owner/admin can
+still change the logic, but at least the *current* logic is readable,
+and this pattern is common for regulated/compliance-driven tokens (which
+often need an upgrade path for legal reasons). It's only raised to
+**High** when Blockscout exposes the proxy's upgrade-admin address *and*
+that address is confirmed to be a plain wallet rather than a contract
+(e.g. a multisig or timelock) — a single point of control with no
+on-chain checks. **This admin-address lookup is opportunistic and
+unverified**: `app.js` checks for a `proxy_admin`/`admin` field on the
+`/smart-contracts/{address}` response as a best-effort guess (its exact
+field name — if Blockscout exposes it at all — could not be confirmed
+from this environment; see the field-names note below), and if it's not
+there, the check simply falls back to the verified/unverified rule above
+without ever fabricating an escalation.
+
 **Limits, by design:**
-- Check 5 is a **name-based ABI scan, not a bytecode or semantics audit**
-  — a differently-named function with the same effect won't be caught,
-  and a function with an alarming name doesn't prove it's actually
-  dangerous. It only runs at all when the contract is verified.
+- Check 5b is a **name-based ABI scan, not a bytecode or semantics
+  audit** — a differently-named function with the same effect won't be
+  caught, and a function with an alarming name doesn't prove it's
+  actually dangerous. It only runs at all when the contract is verified.
 - Check 2 only looks at the first page of `/tokens/{address}/holders`
   (Blockscout's default page size), which comfortably covers "top 10"
-  but isn't a full holder census.
+  but isn't a full holder census. The contract-vs-wallet note on a top
+  holder is also opportunistic — only shown when Blockscout's response
+  actually includes `is_contract` for that address.
 - Check 6 depends entirely on the *optional* RPC secondary and on the
   contract exposing a standard `owner()` view function — very often
   "Unknown", which is expected and shown honestly rather than guessed.
@@ -105,11 +138,33 @@ independently."*
   read of public on-chain and block-explorer data — always verify
   independently before acting on it.
 
+### Number formatting
+
+Counts (holders) and raw token amounts use thousands separators
+everywhere (`365,893`, not `365893`); `scoring.js`'s
+`addThousandsSeparators` does this on the *string* form of large token
+amounts specifically so it never loses precision by round-tripping
+through a JS `Number`. Prices use "sensible" decimals — 2 for values
+$1 and up, more for sub-$1 prices so small values aren't rounded to
+`$0.00`. Volume and market cap are shown **compact** in the risk finding
+(`$867.6M`, `$3.24B`) and in **full**, with separators, in the details
+table. The `$` is only added for `priceUsd`/`volume24hUsd`/
+`marketCapUsd` specifically, based on Blockscout's documented convention
+that `exchange_rate` (and the related volume/market-cap fields) are
+USD-denominated platform-wide — see
+`MARKET_DATA_ASSUMED_CURRENCY` in `scoring.js` for the exact reasoning
+and the same could-not-verify-from-this-sandbox caveat as everything
+else Blockscout-shaped in this README.
+
 `scoring.js` is a standalone module of pure functions (no network calls,
 no DOM) with a `THRESHOLDS` table at the top — edit the numbers there to
 retune any check without touching `app.js`. See
 [`tests/scoring.test.js`](./tests/scoring.test.js) for the full set of
-sample inputs/outputs, runnable with:
+sample inputs/outputs — including a **USDG-like fixture** (verified,
+upgradeable proxy, 365,893 holders, 139 days old, top holder 12.6%, top
+10 = 50%, which must score Medium at most) and an **Agraris-like
+fixture** (unverified, a single holder owning 100% of only 2 holders
+total, which must score High) — runnable with:
 
 ```bash
 node --test tests/scoring.test.js
@@ -289,13 +344,17 @@ Fetch API only ever reports a generic `Failed to fetch` for this case.
 > (`total_blocks`, `is_contract`, `is_verified`, `name`, `symbol`,
 > `decimals`, `total_supply`, `holders_count`/`holders`, `exchange_rate`,
 > `volume_24h`, `circulating_market_cap`, `creation_transaction_hash`/
-> `creation_tx_hash`, `timestamp`, `abi`, `proxy_type`, and the
-> `/tokens/{address}/holders` items' `address.hash`/`value`) are based on
-> the documented/standard Blockscout API v2 schema, with defensive
-> fallbacks where I was least confident. Every field that isn't present
-> in the response is shown as "Unavailable" (or, for Risk Score v1,
-> "Unknown" — see below) rather than guessed — please verify against the
-> live API (`curl https://robinhoodchain.blockscout.com/api/v2/tokens/<address>`,
+> `creation_tx_hash`, `timestamp`, `abi`, `proxy_type`, the
+> `/tokens/{address}/holders` items' `address.hash`/`address.is_contract`/
+> `value`, and the proxy-admin guess `proxy_admin`/`admin` on
+> `/smart-contracts/{address}`) are based on the documented/standard
+> Blockscout API v2 schema, with defensive fallbacks where I was least
+> confident — the proxy-admin field name in particular is a low-confidence
+> guess (see Risk Score v1's check 5a above), wired up to gracefully no-op
+> if wrong rather than ship dead-on-arrival. Every field that isn't
+> present in the response is shown as "Unavailable" (or, for Risk Score
+> v1, "Unknown" — see above) rather than guessed — please verify against
+> the live API (`curl https://robinhoodchain.blockscout.com/api/v2/tokens/<address>`,
 > `.../addresses/<address>`, `.../smart-contracts/<address>`,
 > `.../tokens/<address>/holders`, and `.../transactions/<hash>` for a
 > known creation tx) and adjust the field names in `app.js`'s
