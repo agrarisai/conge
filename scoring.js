@@ -148,6 +148,95 @@ export function formatCompactUsd(value) {
   return `${sign}${formatPriceUsd(abs)}`;
 }
 
+// --- Hand-rolled ABI helpers (no dependency) --------------------------
+// Only what's needed for the handful of read-only calls this app makes:
+// function selectors are given as literals (all four are well-known/
+// specified, not computed from a signature string), plus small
+// encode/decode helpers for a single address arg, a single uint256 arg,
+// and decoding a single address or bool back out of raw eth_call
+// returndata.
+
+export const SELECTOR = {
+  transfer: "0xa9059cbb", // transfer(address,uint256)
+  owner: "0x8da5cb5b", // owner()
+  token0: "0x0dfe1681", // token0()
+  token1: "0xd21220a7", // token1()
+};
+
+const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
+
+// "0xabc...def" -> 64 lowercase hex chars, no "0x" (left-padded to a
+// 32-byte ABI word).
+export function padAddressArg(address) {
+  if (typeof address !== "string" || !ADDRESS_PATTERN.test(address)) {
+    throw new Error(`padAddressArg: not a valid 20-byte hex address: ${address}`);
+  }
+  return address.slice(2).toLowerCase().padStart(64, "0");
+}
+
+// A non-negative integer (bigint, number, or numeric string) -> 64 hex
+// chars, no "0x" (left-padded to a 32-byte ABI word).
+export function padUintArg(value) {
+  const big = typeof value === "bigint" ? value : BigInt(value);
+  if (big < 0n) throw new Error("padUintArg: value must be non-negative");
+  return big.toString(16).padStart(64, "0");
+}
+
+// transfer(address recipient, uint256 amount) calldata.
+export function encodeTransferCallData(recipient, amount) {
+  return SELECTOR.transfer + padAddressArg(recipient) + padUintArg(amount);
+}
+
+// Decodes a single `address` from eth_call returndata (e.g. token0()/
+// token1()/owner()). Returns null for anything that isn't a clean
+// single-word address encoding (upper 12 bytes must be zero) — never
+// guesses at a malformed or unexpected shape.
+export function decodeAddressResult(hex) {
+  if (typeof hex !== "string" || !hex.startsWith("0x")) return null;
+  const body = hex.slice(2);
+  if (body.length < 64) return null;
+  const word = body.slice(0, 64);
+  if (!/^[0-9a-fA-F]{64}$/.test(word)) return null;
+  const upper = word.slice(0, 24);
+  if (!/^0+$/.test(upper)) return null;
+  return "0x" + word.slice(24);
+}
+
+// Decodes a single `bool` from eth_call returndata: any non-zero 32-byte
+// word is true, an all-zero word is false. Returns null if the data
+// doesn't even contain one full word (caller decides how to treat that —
+// see decodeTransferOutcome, which treats it leniently for non-standard
+// tokens).
+export function decodeBoolResult(hex) {
+  if (typeof hex !== "string" || !hex.startsWith("0x")) return null;
+  const body = hex.slice(2);
+  if (body.length < 64) return null;
+  const word = body.slice(0, 64);
+  if (!/^[0-9a-fA-F]{64}$/.test(word)) return null;
+  return !/^0+$/.test(word);
+}
+
+// Interprets the outcome of a simulated transfer() eth_call per the
+// honeypot check's rule: a revert or RPC-level error is a failure, a
+// returned `false` is a failure, and empty returndata is treated as
+// success (plenty of real, non-standard ERC20s don't return a bool at
+// all). `callOutcome` is { ok, result, errorMessage } — ok is whether the
+// eth_call itself completed (not whether it "succeeded" in the transfer
+// sense); errorMessage is only meaningful when ok is false.
+export function decodeTransferOutcome({ ok, result, errorMessage }) {
+  if (!ok) {
+    return { success: false, reason: errorMessage || "The call reverted or returned an RPC error." };
+  }
+  if (result === undefined || result === null || result === "0x" || result === "0x0") {
+    return { success: true, reason: "Empty returndata — treated as success (some tokens don't return a bool from transfer())." };
+  }
+  const decoded = decodeBoolResult(result);
+  if (decoded === null) {
+    return { success: true, reason: "Returndata present but not a standard bool — treated as success." };
+  }
+  return { success: decoded, reason: decoded ? "transfer() returned true." : "transfer() returned false." };
+}
+
 function formatAgePhrase(ageHours) {
   if (ageHours < 48) {
     const hours = Math.max(0, Math.round(ageHours));
@@ -576,7 +665,86 @@ export function scoreOwnerStatus(owner) {
   });
 }
 
-// --- Check 7: market data (informational — does not affect overall level) --
+// --- Check 7: sell-simulation honeypot check --------------------------
+
+// simulation: the raw result app.js builds from a series of eth_call
+// probes (see runSellSimulation in app.js) —
+//   { status: "unreachable" | "no-pool" | "no-holder" | "simulated",
+//     pools: [{ address, token0, token1 }],
+//     holderAttempts: [{ holder, baseline: {success,reason}, sells: [{pool,success,reason}] }] }
+// "unreachable"/"no-pool"/"no-holder" are all inconclusive outcomes —
+// known: false, grouped with "Info / unknown" in the UI, never counted
+// as a pass. Only "simulated" produces a real HIGH or a real (known)
+// PASSED verdict.
+export function scoreSellSimulation(simulation) {
+  const status = simulation?.status ?? "unreachable";
+
+  if (status === "unreachable") {
+    return finding({
+      id: "sell-simulation",
+      known: false,
+      severity: SEVERITY.INFO,
+      title: "Sell simulation unknown",
+      detail: "The Worker/RPC could not be reached to simulate a transfer, so selling could not be tested.",
+    });
+  }
+
+  if (status === "no-pool") {
+    return finding({
+      id: "sell-simulation",
+      known: false,
+      severity: SEVERITY.INFO,
+      title: "No liquidity pool found among top holders",
+      detail:
+        "None of the top holders looked like a liquidity pool for this token (checked via token0()/token1()), so a sell could not be simulated.",
+    });
+  }
+
+  if (status === "no-holder") {
+    return finding({
+      id: "sell-simulation",
+      known: false,
+      severity: SEVERITY.INFO,
+      title: "No eligible holder found to simulate a sell",
+      detail:
+        "A liquidity pool was found, but no top holder (a plain wallet, not a contract, with a positive balance) was available to simulate a transfer from.",
+    });
+  }
+
+  const holderAttempts = simulation.holderAttempts ?? [];
+  const withBaselineOk = holderAttempts.filter((h) => h.baseline?.success);
+
+  if (withBaselineOk.length === 0) {
+    return finding({
+      id: "sell-simulation",
+      severity: SEVERITY.HIGH,
+      title: "Transfers are restricted",
+      detail:
+        "A simulated transfer to an ordinary address failed for every holder tried — this points to a pause, blacklist, or allowlist mechanism blocking transfers generally, not just sells.",
+    });
+  }
+
+  const anySellOk = withBaselineOk.some((h) => (h.sells ?? []).some((s) => s.success));
+  if (!anySellOk) {
+    return finding({
+      id: "sell-simulation",
+      severity: SEVERITY.HIGH,
+      title: "Selling appears blocked",
+      detail:
+        "An ordinary transfer succeeded, but a simulated transfer to every detected liquidity pool failed for every holder tried — a common honeypot pattern where only buying (not selling) is allowed.",
+    });
+  }
+
+  return finding({
+    id: "sell-simulation",
+    severity: SEVERITY.INFO,
+    title: "Sell simulation passed",
+    detail:
+      "A simulated transfer to both an ordinary address and a detected liquidity pool succeeded. This is an indicator, not a guarantee — it can't detect every trap (see the limits noted in the README).",
+  });
+}
+
+// --- Check 8: market data (informational — does not affect overall level) --
 
 export function scoreMarketData({ priceUsd, volume24hUsd, marketCapUsd } = {}) {
   const known = priceUsd != null || volume24hUsd != null || marketCapUsd != null;
@@ -629,6 +797,7 @@ export function scoreToken(facts, thresholds = THRESHOLDS) {
       thresholds,
     ),
     scoreOwnerStatus(facts.owner),
+    scoreSellSimulation(facts.sellSimulation),
     scoreMarketData(facts.marketData ?? {}),
   ];
   return { overallLevel: computeOverallLevel(findings, thresholds), findings };

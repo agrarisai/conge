@@ -9,32 +9,36 @@ The first supported chain is **Robinhood Chain mainnet**:
 - Chain ID: `4663`
 - Blockscout API (primary data source): `https://robinhoodchain.blockscout.com/api/v2`
 - Explorer: `https://robinhoodchain.blockscout.com`
-- RPC (optional secondary source): `https://rpc.mainnet.chain.robinhood.com`
+- RPC (optional secondary source, via the Worker proxy): `https://conge-rpc.agrarisai.workers.dev`
 
-**The Blockscout API v2 is the primary data source.** The RPC endpoint is
-only an optional secondary source — the site works fully with it removed
-or unreachable, and only uses it to add extra data (a token's `owner()`,
-or a cross-check of the chain ID) when it happens to be reachable. This
-split exists because `rpc.mainnet.chain.robinhood.com` has been reported
-unreachable from some mobile devices (a TLS certificate error), while the
-Blockscout API works fine from the same devices.
+**The Blockscout API v2 is the primary data source.** RPC reads are only
+an optional secondary source — the site works fully with them removed or
+unreachable, and only uses them to add extra data (a token's `owner()`,
+the sell-simulation honeypot check, or a cross-check of the chain ID)
+when reachable. **The site never calls `rpc.mainnet.chain.robinhood.com`
+directly** — that endpoint has been reported unreachable from some mobile
+devices (a TLS certificate error). Instead, every RPC call from the
+browser goes through the [Worker](#worker) proxy at
+`WORKER_URL` (`https://conge-rpc.agrarisai.workers.dev`), which forwards
+read-only calls to the upstream RPC from Cloudflare's edge and adds CORS
+headers for this site's origin.
 
 ## Features
 
 - **Network status** — fetches `GET /stats` from the Blockscout API and
   shows `total_blocks` as the latest block, alongside the chain ID and
   name from `CONFIG` (Blockscout's `/stats` doesn't return a chain ID, so
-  that value is not independently verified unless the RPC secondary is
-  also reachable). If the optional RPC is reachable too, its
-  `eth_chainId` is cross-checked against `CONFIG.chainId` and flagged if
-  it doesn't match. Every fetch (Blockscout and RPC) is a plain `fetch()`
-  call with a 10s timeout — not viem's transport — so failures can be
-  classified precisely: network/CORS/TLS failure vs. an HTTP error
-  (403/429/5xx) vs. a JSON-RPC error vs. an unparseable body. The **Data
-  source** row always says which source(s) the displayed values came
-  from. If the primary source fails, a collapsible **Technical details**
-  panel shows the raw error name/message, HTTP status (if any), the URL
-  that was tried, and the page's origin for every source attempted — see
+  that value is not independently verified unless the Worker secondary is
+  also reachable). If the Worker is reachable too, its `eth_chainId` is
+  cross-checked against `CONFIG.chainId` and flagged if it doesn't match.
+  Every fetch (Blockscout and the Worker) is a plain `fetch()` call with a
+  timeout — not viem's transport — so failures can be classified
+  precisely: network/CORS/TLS failure vs. an HTTP error (403/429/5xx) vs.
+  a JSON-RPC error vs. an unparseable body. The **Data source** row always
+  says which source(s) the displayed values came from. If the primary
+  source fails, a collapsible **Technical details** panel shows the raw
+  error name/message, HTTP status (if any), the URL that was tried, and
+  the page's origin for every source attempted — see
   [Troubleshooting network connectivity](#troubleshooting-network-connectivity)
   below. A **Retry connection** button re-runs the whole check.
 - **Scan a token** — enter a contract address and Conge looks it up via
@@ -45,14 +49,15 @@ Blockscout API works fine from the same devices.
   (verification status and, when verified, the ABI), and
   `GET /tokens/{address}/holders` (top holder balances). A follow-up call
   to `GET /transactions/{creation_transaction_hash}` gets the contract's
-  deployment timestamp. If the optional RPC secondary is reachable, it's
-  additionally used for one thing Blockscout has no generic field for:
-  reading the contract's `owner()`. Every field that couldn't be
-  determined shows **"Unavailable"** rather than a guess, and the result
-  card's **Data source** row says exactly which source(s) contributed.
-  If any Blockscout request fails outright (not a "not found"), a
-  collapsible **Technical details** panel shows the real error for each
-  request that was made.
+  deployment timestamp. If the Worker RPC secondary is reachable, it's
+  additionally used for things Blockscout has no generic field for:
+  reading the contract's `owner()`, and the
+  [sell-simulation honeypot check](#sell-simulation-honeypot-check).
+  Every field that couldn't be determined shows **"Unavailable"** rather
+  than a guess, and the result card's **Data source** row says exactly
+  which source(s) contributed. If any Blockscout request fails outright
+  (not a "not found"), a collapsible **Technical details** panel shows the
+  real error for each request that was made.
 - **Risk Score v1** — every scan of a contract also runs a transparent,
   rule-based risk check (see below) and shows a summary card — overall
   level, then findings grouped by severity — above the token details.
@@ -62,7 +67,7 @@ Blockscout API works fine from the same devices.
 
 ## Risk Score v1
 
-Every scan of an address that turns out to be a contract runs seven
+Every scan of an address that turns out to be a contract runs eight
 checks, each producing one or more **findings** — a severity
 (`info` / `low` / `medium` / `high`), a one-line title, and a short
 "why it matters" explanation. Findings are transparent and rule-based:
@@ -96,8 +101,9 @@ independently."*
 | 4 | Token age | Creation tx timestamp (`GET /transactions/{hash}`) | **<24h High**, **<7 days Medium** |
 | 5a | Proxy upgrade (independent of verification — see below) | `proxy_type` (or an `upgradeTo`-style function in a verified ABI) | **Unverified source: High.** Verified source: **Medium** by default (common for regulated/compliant tokens), raised to **High** only if the upgrade admin is *confirmed* to be a plain wallet rather than a contract |
 | 5b | Other owner privileges (verified contracts only) | ABI from `GET /smart-contracts/{address}` — name-matched for mint / pause / blacklist·blocklist / setFee·setTax / setMaxTx·setMaxWallet | Each detected privilege is its own finding (severities in `THRESHOLDS.ownerPrivilegeSeverity`, tune freely — mostly Medium, max-tx/wallet is Low) |
-| 6 | Owner status | RPC secondary `owner()` read | Informational: shows the owner, or "Ownership renounced" if it's the zero address |
-| 7 | Market data | Blockscout `exchange_rate` / `volume_24h` / `circulating_market_cap` | Informational only — shown but never affects the overall level |
+| 6 | Owner status | Worker RPC secondary, `owner()` read (selector `0x8da5cb5b`) | Informational: shows the owner, or "Ownership renounced" if it's the zero address; stays "Unknown" if the call fails or the Worker is unreachable |
+| 7 | Sell-simulation honeypot check | Worker RPC secondary, `eth_call` simulation — see [below](#sell-simulation-honeypot-check) | **High** if selling appears blocked or transfers are restricted; **Passed** if both a baseline and a pool-directed transfer simulate successfully; **Info/Unknown** if no pool could be found among the top holders or the Worker is unreachable (never counted as a pass) |
+| 8 | Market data | Blockscout `exchange_rate` / `volume_24h` / `circulating_market_cap` | Informational only — shown but never affects the overall level |
 
 **Check 5a (proxy upgrade) in detail**, since it's the one check with a
 conditional severity rule rather than a fixed threshold: being an
@@ -131,12 +137,78 @@ without ever fabricating an escalation.
   but isn't a full holder census. The contract-vs-wallet note on a top
   holder is also opportunistic — only shown when Blockscout's response
   actually includes `is_contract` for that address.
-- Check 6 depends entirely on the *optional* RPC secondary and on the
-  contract exposing a standard `owner()` view function — very often
+- Check 6 depends entirely on the *optional* Worker RPC secondary and on
+  the contract exposing a standard `owner()` view function — very often
   "Unknown", which is expected and shown honestly rather than guessed.
+- Check 7 (the sell-simulation honeypot check) is an **indicator, not a
+  guarantee** — see its own [Limits](#sell-simulation-honeypot-check)
+  below for what it can and cannot detect.
 - None of this is an audit or a guarantee. It's a fast, transparent
   read of public on-chain and block-explorer data — always verify
   independently before acting on it.
+
+### Sell-simulation honeypot check
+
+Check 7 tries to answer a narrower, harder question than the others:
+*can a normal holder actually sell this token?* Some tokens look fine on
+paper (verified, well distributed, no obvious privileged function) but
+silently block transfers to a liquidity pool — a classic "honeypot". This
+check is read-only and DEX-agnostic: it never assumes a specific router
+or factory, and it never invents an address.
+
+It runs three steps, entirely through the [Worker](#worker) RPC proxy:
+
+1. **Pick holders to test.** From the top holders Blockscout already
+   returned, pick up to 3 that are *not* contracts, have a balance above
+   zero, and aren't zero/burn addresses.
+2. **Detect liquidity pools.** Among the top 10 holders that *are*
+   contracts, call `token0()` (`0x0dfe1681`) and `token1()`
+   (`0xd21220a7`) on each one. A holder that returns two valid addresses,
+   one of which is the scanned token itself, is treated as a pool — no
+   assumption is made about which DEX it belongs to.
+3. **Simulate a transfer with `eth_call`** (never a real transaction) for
+   each selected holder: `from` the holder, `to` the token, `data` a
+   `transfer(recipient, amount)` call encoded by hand (amount = 1% of
+   that holder's balance, at least 1 raw unit) —
+   a) a **baseline** simulation with a fixed, neutral probe address as
+      recipient, and
+   b) a **sell-like** simulation with each detected pool as recipient.
+   Calls are batched (max 10 per JSON-RPC batch). A revert, an RPC
+   error, or a returned value of `false` counts as failure; empty
+   returndata counts as success (some tokens don't return a bool).
+
+**Interpretation:**
+- Baseline succeeds, every pool-directed transfer fails → **High**,
+  "Selling appears blocked".
+- The baseline itself fails → **High**, "Transfers are restricted"
+  (consistent with a pause, blacklist, or allowlist).
+- Both succeed → **Passed**, "Sell simulation passed" — shown with the
+  caveat that this is an indicator, not proof, and cannot detect every
+  trap.
+- No pool found among the top holders → **Info/Unknown**, "No liquidity
+  pool found among top holders, sell could not be simulated".
+- The Worker or the upstream RPC is unreachable → **Info/Unknown**,
+  never counted as a pass.
+
+Every finding shows a **"How this was checked"** collapsible: which
+holder(s) were used, which pool addresses were detected, and which calls
+succeeded or failed — each address linked to its Blockscout page.
+
+**Limits, by design:**
+- It **cannot measure buy/sell tax** — a transfer can succeed while still
+  taking a cut; this check only detects an outright block, not a fee.
+- It **cannot see rules that only trigger inside a router's `swap`
+  call** — some tokens only misbehave when the caller is a specific
+  router contract mid-swap, which a direct `transfer()` simulation from
+  the holder doesn't reproduce.
+- **Time- or amount-based traps can slip through** — a token that only
+  blocks transfers above a threshold, or after/before a certain time
+  window, may pass this simulation while still being a honeypot in
+  practice.
+- It only runs at all when at least one eligible holder and one detected
+  pool exist; the pure interpretation logic lives in `scoreSellSimulation`
+  in `scoring.js`, unit-tested against fixtures for every outcome above
+  (blocked, restricted, passed, no pool, no holder, Worker unreachable).
 
 ### Number formatting
 
@@ -158,13 +230,19 @@ else Blockscout-shaped in this README.
 
 `scoring.js` is a standalone module of pure functions (no network calls,
 no DOM) with a `THRESHOLDS` table at the top — edit the numbers there to
-retune any check without touching `app.js`. See
+retune any check without touching `app.js`. It also holds small,
+hand-rolled ABI helpers (4-byte selectors, 32-byte arg padding, and
+address/bool return decoding) used by the owner check and the
+sell-simulation honeypot check — no ABI-encoding library is used. See
 [`tests/scoring.test.js`](./tests/scoring.test.js) for the full set of
 sample inputs/outputs — including a **USDG-like fixture** (verified,
 upgradeable proxy, 365,893 holders, 139 days old, top holder 12.6%, top
 10 = 50%, which must score Medium at most) and an **Agraris-like
 fixture** (unverified, a single holder owning 100% of only 2 holders
-total, which must score High) — runnable with:
+total, which must score High) — both fixtures also confirm that a
+blocked-sell or restricted-transfers honeypot outcome never scores lower
+than High, and that an unreachable Worker never lowers the overall level
+— runnable with:
 
 ```bash
 node --test tests/scoring.test.js
@@ -177,31 +255,34 @@ with the rest of this project.)
 
 - Plain HTML, CSS, and JavaScript (ES modules) — no build step, no npm.
 - [viem](https://viem.sh) is loaded from a version-pinned ES module CDN
-  (`https://esm.sh/viem@2.21.19`), used only for its `isAddress` /
-  `getAddress` / `formatUnits` utilities (pure functions, no network) and
-  for the optional RPC secondary's `owner()` read.
-- All chain/Blockscout/RPC configuration lives in a single `CONFIG`
-  constant at the top of `app.js`: `explorerApiUrl` (the Blockscout API
-  v2 base URL — the primary source) and `rpcUrls` (an optional secondary
-  RPC endpoint list, tried in order, none of them required). Only add an
-  RPC endpoint here once you've verified it exists and actually allows
-  browser requests from this site's origin (see below) — don't add
-  unverified URLs.
+  (`https://esm.sh/viem@2.21.19`), used *only* for its `isAddress` /
+  `getAddress` / `formatUnits` utilities (pure functions, no network). It
+  is not used as an RPC client — all RPC calls go through the Worker via
+  plain `fetch()` and hand-rolled JSON-RPC/ABI encoding in `app.js` and
+  `scoring.js`.
+- All chain/Blockscout configuration lives in a single `CONFIG` constant
+  at the top of `app.js`: `chainId`, `chainName`, `explorerUrl`, and
+  `explorerApiUrl` (the Blockscout API v2 base URL — the primary source).
+  The Worker RPC proxy's URL is a separate `WORKER_URL` constant next to
+  `CONFIG` — the single place every RPC call in the app is routed
+  through. **The site never constructs a request to
+  `rpc.mainnet.chain.robinhood.com` directly.**
 - Risk scoring logic lives in `scoring.js`, a separate module of pure
   functions imported by `app.js` — `app.js` gathers "facts" from
-  Blockscout/RPC and hands them to `scoreToken()`, which does no I/O of
-  its own (that's what makes it unit-testable without mocking a network).
+  Blockscout/the Worker and hands them to `scoreToken()`, which does no
+  I/O of its own (that's what makes it unit-testable without mocking a
+  network).
 
 ## Project structure
 
 ```
 index.html          # page structure
 style.css            # styling (mobile-first, light theme)
-app.js               # app logic (ES module, imports viem + scoring.js)
-scoring.js           # Risk Score v1 — pure, rule-based scoring functions
+app.js               # app logic (ES module, imports viem utils + scoring.js)
+scoring.js           # Risk Score v1 — pure, rule-based scoring + ABI helpers
 tests/scoring.test.js  # unit tests for scoring.js (node --test)
 assets/              # brand imagery — see "Branding assets" below
-worker/              # optional Cloudflare Worker RPC proxy — see "Worker" below
+worker/              # Cloudflare Worker RPC proxy — see "Worker" below
   index.js             # the Worker itself (single file, no dependencies)
   README.md            # deploy steps, /health, rate limiting
   tests/worker.test.js # unit tests for its validation/CORS logic (node --test)
@@ -276,32 +357,35 @@ changes needed as long as the filename stays the same.
 ## Troubleshooting network connectivity
 
 If **Network status** shows "Connection failed" (both the Blockscout
-primary and the RPC secondary failed), or a scan shows a Blockscout error,
-open **Technical details** on the page — it shows, for every source that
-was tried: the exact browser error name/message, the HTTP status (if a
-response came back at all), the URL, and the page's origin. That's
-usually enough to tell what's wrong:
+primary and the Worker RPC secondary failed), or a scan shows a
+Blockscout error, open **Technical details** on the page — it shows, for
+every source that was tried: the exact browser error name/message, the
+HTTP status (if a response came back at all), the URL, and the page's
+origin. That's usually enough to tell what's wrong:
 
 - **Error name `TypeError`, message `Failed to fetch` (or similar)** — the
   browser couldn't complete the request at all. The Fetch API doesn't
   expose *why* for security reasons, but it's one of: a CORS restriction
   (the endpoint didn't return `Access-Control-Allow-Origin` for this
   page's origin), an invalid/expired TLS certificate, no network
-  connectivity, a DNS failure, or the endpoint being down. **This is
-  exactly the error a TLS certificate problem produces** — it's why
-  `rpc.mainnet.chain.robinhood.com`'s reported TLS issue and a CORS
-  problem look identical from inside the browser, and why the RPC is only
-  ever an optional secondary here now. To narrow it down, open the URL
-  directly in a new browser tab (or `curl` it, see below) — if that also
-  fails, it's not CORS specifically (though a TLS cert error will fail
-  both ways).
+  connectivity, a DNS failure, or the endpoint being down. This is why the
+  site talks to the Worker (`WORKER_URL`) instead of
+  `rpc.mainnet.chain.robinhood.com` directly — that raw endpoint has been
+  reported unreachable from some mobile devices (a TLS certificate error),
+  while the Worker sits in front of it on Cloudflare's own edge and
+  explicitly adds CORS headers for this site's origin. To narrow down a
+  Worker failure, open `https://conge-rpc.agrarisai.workers.dev/health`
+  directly in a browser tab (it's not origin-restricted, see
+  [Worker](#worker) below) — if that also fails, the Worker itself or its
+  upstream RPC is down, not a CORS issue.
 - **An HTTP status (403, 429, 5xx, …)** — the request reached the server,
-  which rejected or failed it. 403 often means the endpoint blocks
-  non-whitelisted origins/user agents; 429 means it's rate-limiting; 5xx
-  means it's having problems server-side.
-- **A JSON-RPC error** (RPC secondary only) — the request and response
-  both worked at the HTTP level, but the node returned a JSON-RPC `error`
-  object (e.g. an unsupported method).
+  which rejected or failed it. 403 from the Worker specifically means the
+  request's `Origin` isn't `https://agrarisai.github.io` (by design); 429
+  means rate-limiting; 5xx/502 means the Worker or its upstream is having
+  problems.
+- **A JSON-RPC error** (Worker RPC secondary only) — the request and
+  response both worked at the HTTP level, but the node returned a
+  JSON-RPC `error` object (e.g. an unsupported method).
 
 ### Checking CORS from the command line
 
@@ -313,10 +397,10 @@ curl -i "https://robinhoodchain.blockscout.com/api/v2/stats" \
   -H "Origin: https://agrarisai.github.io"
 ```
 
-For the RPC (optional secondary):
+For the Worker (RPC secondary):
 
 ```bash
-curl -i -X POST https://rpc.mainnet.chain.robinhood.com \
+curl -i -X POST https://conge-rpc.agrarisai.workers.dev \
   -H "Content-Type: application/json" \
   -H "Origin: https://agrarisai.github.io" \
   --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
@@ -340,11 +424,16 @@ Fetch API only ever reports a generic `Failed to fetch` for this case.
 > **Note on this repo's own testing:** the sandboxed environment this PR
 > was prepared in has an egress allowlist that blocks direct connections
 > to `robinhoodchain.blockscout.com`, `rpc.mainnet.chain.robinhood.com`,
-> `esm.sh`, and `docs.blockscout.com` entirely — every attempt (via `curl`
-> and via a web-fetch tool) failed at the proxy/CONNECT level before a
-> request ever reached those hosts. So neither the Blockscout CORS check
-> above nor the exact Blockscout API v2 response field names could be
-> verified from this environment. The field names used in `app.js`
+> `esm.sh`, `docs.blockscout.com`, and `conge-rpc.agrarisai.workers.dev`
+> entirely — every attempt (via `curl` and via a web-fetch tool) failed at
+> the proxy/CONNECT level before a request ever reached those hosts. So
+> neither the Blockscout/Worker CORS checks above nor the exact
+> Blockscout API v2 response field names could be verified from this
+> environment; the sell-simulation honeypot check and the Worker's
+> `eth_call` `"from"` handling were instead verified by reading
+> `worker/index.js` directly and with a mocked-`fetch()` Playwright
+> harness (never committed) exercising every interpretation outcome. The
+> field names used in `app.js`
 > (`total_blocks`, `is_contract`, `is_verified`, `name`, `symbol`,
 > `decimals`, `total_supply`, `holders_count`/`holders`, `exchange_rate`,
 > `volume_24h`, `circulating_market_cap`, `creation_transaction_hash`/
@@ -368,8 +457,10 @@ Fetch API only ever reports a generic `Failed to fetch` for this case.
 ### If the Blockscout API also blocks browser requests
 
 Both the Blockscout API and the RPC are official, first-party endpoints
-for this chain, so if it turns out neither sends CORS headers for this
-origin, here are the options, in rough order of effort — **do not** route
+for this chain. The RPC's CORS gap is already handled by the Worker (see
+below); if it turns out Blockscout *also* doesn't send CORS headers for
+this origin, here are the options, in rough order of effort — **do not**
+route
 around this with an unofficial third-party CORS proxy (e.g.
 `corsproxy.io`), since that would send every visitor's requests through an
 unaccountable third party:
@@ -407,14 +498,16 @@ back to this list.
 
 [`worker/`](./worker) holds a small, dependency-free Cloudflare Worker
 (`worker/index.js`, a single file) that proxies read-only JSON-RPC calls
-to `rpc.mainnet.chain.robinhood.com` — the RPC endpoint this site
-otherwise talks to directly as the optional secondary source (see
+to `rpc.mainnet.chain.robinhood.com` — the raw RPC endpoint, which this
+site never calls directly (see
 [Troubleshooting network connectivity](#troubleshooting-network-connectivity)
 above for why that endpoint can fail from some networks). It:
 
 - only forwards `eth_chainId`, `eth_blockNumber`, `eth_call`, and
   `eth_getCode`, all restricted to the `"latest"` block (no historical
-  reads, nothing that could write or sign);
+  reads, nothing that could write or sign) — `eth_call`'s optional `from`
+  field is validated and forwarded untouched, which the owner check and
+  the sell-simulation honeypot check both rely on;
 - validates addresses/call data as hex before forwarding;
 - only accepts requests from `https://agrarisai.github.io` (no wildcard
   CORS);
@@ -431,11 +524,13 @@ Cloudflare dashboard (no CLI needed) and how to read `/health`. Its pure
 validation/CORS logic has its own unit tests, runnable with
 `node --test worker/tests/worker.test.js`.
 
-**This Worker is not yet wired into `app.js`.** Its URL depends on the
-Cloudflare account/subdomain it's deployed under, which this repo can't
-know in advance — once deployed, add its URL to `CONFIG.rpcUrls` in
-`app.js` (see [Tech](#tech) above) to actually start using it as the RPC
-secondary source, the same way any other RPC URL is added there.
+**The Worker is deployed and wired into `app.js`** as the `WORKER_URL`
+constant (`https://conge-rpc.agrarisai.workers.dev`, next to `CONFIG` —
+see [Tech](#tech) above). Every RPC call the site makes — the network
+status chain-ID cross-check, the owner check, and the sell-simulation
+honeypot check — goes through it; there is no direct-to-upstream code
+path left in `app.js`. If you deploy your own copy of the Worker (a
+different Cloudflare account/subdomain), update `WORKER_URL` to match.
 
 ## Security notes
 

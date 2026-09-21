@@ -1,11 +1,4 @@
-import {
-  createPublicClient,
-  http,
-  defineChain,
-  isAddress,
-  getAddress,
-  formatUnits,
-} from "https://esm.sh/viem@2.21.19";
+import { isAddress, getAddress, formatUnits } from "https://esm.sh/viem@2.21.19";
 
 import {
   scoreToken,
@@ -14,54 +7,50 @@ import {
   formatPriceUsd,
   formatCompactUsd,
   MARKET_DATA_ASSUMED_CURRENCY,
+  isBurnOrZeroAddress,
+  SELECTOR,
+  encodeTransferCallData,
+  decodeAddressResult,
+  decodeTransferOutcome,
 } from "./scoring.js";
 
-// Single source of truth for chain/explorer/RPC configuration.
-//
-// The Blockscout API v2 (explorerApiUrl) is the PRIMARY data source for
-// this site — it's what Network status and Scan a token rely on to work
-// at all. rpcUrls is an OPTIONAL secondary source: if reachable, it adds
-// extra data (e.g. a token's owner() call, or a cross-check of the chain
-// ID), but the site must work fully with rpcUrls empty or unreachable.
-// Only add an RPC endpoint here once you've verified it exists and
-// allows browser (CORS) requests from this site's origin — see
-// README.md for how to check.
+// Cloudflare Worker RPC proxy (see worker/) — a thin, read-only JSON-RPC
+// proxy for rpc.mainnet.chain.robinhood.com, deployed and confirmed
+// healthy at this URL. ALL RPC calls from this site go through it; the
+// raw upstream RPC is never called directly from the browser, since it's
+// been reported unreachable from some networks (see "Troubleshooting
+// network connectivity" in README.md). Blockscout remains the primary
+// data source — the Worker is only ever an optional secondary source
+// (chain-ID cross-check, owner(), the sell-simulation honeypot check
+// below); the site works fully with it unreachable too.
+const WORKER_URL = "https://conge-rpc.agrarisai.workers.dev";
+
+// Single source of truth for chain/explorer configuration. The Blockscout
+// API v2 (explorerApiUrl) is the PRIMARY data source for this site — it's
+// what Network status and Scan a token rely on to work at all.
 const CONFIG = {
   chainId: 4663,
   chainName: "Robinhood Chain",
   explorerUrl: "https://robinhoodchain.blockscout.com",
   explorerApiUrl: "https://robinhoodchain.blockscout.com/api/v2",
-  rpcUrls: ["https://rpc.mainnet.chain.robinhood.com"],
 };
 
 const FETCH_TIMEOUT_MS = 10_000;
 const BLOCKSCOUT_SOURCE = "Blockscout API v2";
+const WORKER_SOURCE = "Worker";
 
-const robinhoodChain = defineChain({
-  id: CONFIG.chainId,
-  name: CONFIG.chainName,
-  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-  rpcUrls: {
-    default: { http: CONFIG.rpcUrls },
-  },
-  blockExplorers: {
-    default: { name: "Blockscout", url: CONFIG.explorerUrl },
-  },
-});
+// The Worker's own batch-size limit (see worker/index.js's MAX_BATCH_SIZE)
+// — calls to it must be chunked to this size or smaller.
+const WORKER_MAX_BATCH_SIZE = 10;
 
-// Only used for the optional RPC secondary source (currently: reading a
-// token's owner()). Given a short timeout so a dead/unreachable RPC never
-// makes the (Blockscout-driven) scan hang.
-const publicClient = createPublicClient({
-  chain: robinhoodChain,
-  transport: http(CONFIG.rpcUrls[0], { timeout: FETCH_TIMEOUT_MS }),
-});
-
-// Only owner() is read over RPC now — every other token field comes from
-// the Blockscout API (see scanToken below).
-const OWNER_ABI = [
-  { type: "function", name: "owner", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
-];
+// An arbitrary, unfunded placeholder address with no special meaning to
+// any token or protocol — used only as the baseline transfer-simulation
+// recipient in the sell-simulation honeypot check below. eth_call never
+// actually moves funds (it simulates against current state and discards
+// the result), so this address never needs to be real or fundable; it
+// just needs to be a plain, ordinary-looking recipient distinct from the
+// zero/burn addresses (which some tokens special-case).
+const PROBE_RECIPIENT_ADDRESS = "0x" + "ab".repeat(20);
 
 // --- Shared fetch/diagnostics helpers -----------------------------------
 
@@ -136,12 +125,13 @@ async function fetchBlockscout(path, label) {
   return { ok: true, status: response.status, body, diagnostic };
 }
 
-// Plain fetch() JSON-RPC POST — deliberately bypasses viem's transport so
-// the raw browser error (name/message), HTTP status, and response body
-// are all directly inspectable for the RPC secondary source.
-async function probeRpcUrl(url) {
+// Plain fetch() JSON-RPC POST to the Worker — deliberately bypasses any
+// higher-level client so the raw browser error (name/message), HTTP
+// status, and response body are all directly inspectable for the Worker
+// secondary source.
+async function probeWorker() {
   const raw = await fetchRaw(
-    url,
+    WORKER_URL,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -150,7 +140,7 @@ async function probeRpcUrl(url) {
         { jsonrpc: "2.0", id: 2, method: "eth_blockNumber", params: [] },
       ]),
     },
-    "RPC (secondary) — eth_chainId / eth_blockNumber",
+    `${WORKER_SOURCE} (secondary) — eth_chainId / eth_blockNumber`,
   );
   if (!raw.ok) {
     return raw;
@@ -201,6 +191,201 @@ async function probeRpcUrl(url) {
       : null;
 
   return { ok: true, chainId, blockNumber, diagnostic };
+}
+
+// --- eth_call via the Worker (owner() read + sell-simulation honeypot) ---
+//
+// Sends up to WORKER_MAX_BATCH_SIZE eth_call requests to the Worker in
+// one JSON-RPC batch POST. Returns { ok: true, results } if the Worker
+// itself responded with a parseable JSON-RPC envelope — `results` has one
+// entry per call, each { ok, result, errorMessage }, where `ok` reflects
+// whether THAT SPECIFIC call succeeded (no JSON-RPC `error`), independent
+// of the others. Returns { ok: false, diagnostic } only if the Worker
+// itself couldn't be reached at all (network/timeout/non-JSON/non-2xx) —
+// a deliberately different failure mode from a per-call revert, since the
+// honeypot check needs to tell "the Worker is down" (Unknown) apart from
+// "this specific call reverted" (a real, informative result).
+async function callWorkerBatch(calls, label) {
+  const requests = calls.map((call, i) => ({
+    jsonrpc: "2.0",
+    id: i + 1,
+    method: "eth_call",
+    params: [
+      call.from ? { to: call.to, data: call.data, from: call.from } : { to: call.to, data: call.data },
+      "latest",
+    ],
+  }));
+
+  const raw = await fetchRaw(
+    WORKER_URL,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requests.length === 1 ? requests[0] : requests),
+    },
+    label || `${WORKER_SOURCE} — eth_call batch`,
+  );
+  if (!raw.ok) {
+    return { ok: false, diagnostic: raw.diagnostic };
+  }
+
+  const { response, rawText, body, diagnostic } = raw;
+
+  if (!response.ok) {
+    const bodyError = body && (Array.isArray(body) ? body.find((entry) => entry?.error)?.error : body.error);
+    diagnostic.errorName = "HTTPError";
+    diagnostic.errorMessage = bodyError?.message || body?.error || response.statusText || `HTTP ${response.status}`;
+    diagnostic.kind = "http";
+    return { ok: false, diagnostic };
+  }
+
+  if (body === null) {
+    diagnostic.errorName = "SyntaxError";
+    diagnostic.errorMessage = `Worker response was not valid JSON (first 200 chars): ${rawText.slice(0, 200)}`;
+    diagnostic.kind = "invalid-response";
+    return { ok: false, diagnostic };
+  }
+
+  const resultsArray = Array.isArray(body) ? body : [body];
+  const byId = new Map(resultsArray.filter((r) => r && typeof r === "object").map((r) => [r.id, r]));
+
+  const results = requests.map((req) => {
+    const entry = byId.get(req.id);
+    if (!entry) return { ok: false, result: null, errorMessage: "The Worker returned no response for this call." };
+    if (entry.error) return { ok: false, result: null, errorMessage: entry.error.message || "Call error." };
+    return { ok: true, result: entry.result, errorMessage: null };
+  });
+
+  return { ok: true, results, diagnostic };
+}
+
+// Splits `calls` into chunks of at most WORKER_MAX_BATCH_SIZE and sends
+// each as its own batch. If the Worker is unreachable for ANY chunk, the
+// whole thing is treated as unreachable — a partial read here would be
+// more confusing than useful for the honeypot check's "Worker or RPC
+// unreachable" outcome.
+async function callWorkerChunked(calls, label) {
+  const allResults = [];
+  const diagnostics = [];
+  for (let i = 0; i < calls.length; i += WORKER_MAX_BATCH_SIZE) {
+    const chunk = calls.slice(i, i + WORKER_MAX_BATCH_SIZE);
+    const outcome = await callWorkerBatch(chunk, label);
+    diagnostics.push(outcome.diagnostic);
+    if (!outcome.ok) {
+      return { ok: false, diagnostics };
+    }
+    allResults.push(...outcome.results);
+  }
+  return { ok: true, results: allResults, diagnostics };
+}
+
+// Reads a token's owner() through the Worker (the one thing Blockscout has
+// no generic field for). Returns the owner address, or null if the call
+// failed for any reason (unverified/no owner(), reverted, Worker down).
+async function fetchOwnerViaWorker(tokenAddress) {
+  const outcome = await callWorkerChunked([{ to: tokenAddress, data: SELECTOR.owner }], `${WORKER_SOURCE} — eth_call owner()`);
+  if (!outcome.ok || !outcome.results[0].ok) return null;
+  return decodeAddressResult(outcome.results[0].result);
+}
+
+// --- Sell-simulation honeypot check ---------------------------------------
+//
+// DEX-agnostic and read-only: never assumes a specific DEX, never invents
+// factory/router addresses. Detects liquidity pools among the top 10
+// holders purely by asking each contract holder for token0()/token1() and
+// checking whether one of those matches the scanned token — any contract
+// that answers that way is treated as a pool, whichever DEX it belongs
+// to. Then simulates, via eth_call (never a real transaction), a transfer
+// from up to 3 plain-wallet top holders to (a) a fixed probe address and
+// (b) each detected pool, to see whether "selling" looks blocked.
+async function runSellSimulation(tokenAddress, holders) {
+  const top10 = Array.isArray(holders) ? holders.slice(0, 10) : [];
+  const contractHolders = top10.filter((h) => h.isContract === true);
+
+  if (contractHolders.length === 0) {
+    return { status: "no-pool", pools: [], holderAttempts: [] };
+  }
+
+  const poolCalls = contractHolders.flatMap((h) => [
+    { to: h.address, data: SELECTOR.token0 },
+    { to: h.address, data: SELECTOR.token1 },
+  ]);
+
+  const poolOutcome = await callWorkerChunked(poolCalls, `${WORKER_SOURCE} — eth_call token0()/token1() (pool detection)`);
+  if (!poolOutcome.ok) {
+    return { status: "unreachable", pools: [], holderAttempts: [], diagnostics: poolOutcome.diagnostics };
+  }
+
+  const pools = [];
+  const tokenLower = tokenAddress.toLowerCase();
+  contractHolders.forEach((h, i) => {
+    const token0Result = poolOutcome.results[i * 2];
+    const token1Result = poolOutcome.results[i * 2 + 1];
+    const token0 = token0Result.ok ? decodeAddressResult(token0Result.result) : null;
+    const token1 = token1Result.ok ? decodeAddressResult(token1Result.result) : null;
+    if (!token0 || !token1) return;
+    if (token0.toLowerCase() === tokenLower || token1.toLowerCase() === tokenLower) {
+      pools.push({ address: h.address, token0, token1 });
+    }
+  });
+
+  if (pools.length === 0) {
+    return { status: "no-pool", pools: [], holderAttempts: [] };
+  }
+
+  const candidateHolders = (Array.isArray(holders) ? holders : [])
+    .filter((h) => h.isContract === false && !isBurnOrZeroAddress(h.address))
+    .filter((h) => {
+      try {
+        return BigInt(h.valueRaw) > 0n;
+      } catch {
+        return false;
+      }
+    })
+    .slice(0, 3);
+
+  if (candidateHolders.length === 0) {
+    return { status: "no-holder", pools, holderAttempts: [] };
+  }
+
+  const simulationCalls = [];
+  const callTags = [];
+  for (const holder of candidateHolders) {
+    const balance = BigInt(holder.valueRaw);
+    const onePercent = balance / 100n;
+    const amount = onePercent > 0n ? onePercent : 1n;
+
+    simulationCalls.push({
+      to: tokenAddress,
+      data: encodeTransferCallData(PROBE_RECIPIENT_ADDRESS, amount),
+      from: holder.address,
+    });
+    callTags.push({ holder: holder.address, kind: "baseline" });
+
+    for (const pool of pools) {
+      simulationCalls.push({ to: tokenAddress, data: encodeTransferCallData(pool.address, amount), from: holder.address });
+      callTags.push({ holder: holder.address, kind: "sell", pool: pool.address });
+    }
+  }
+
+  const simOutcome = await callWorkerChunked(simulationCalls, `${WORKER_SOURCE} — eth_call transfer() simulation`);
+  if (!simOutcome.ok) {
+    return { status: "unreachable", pools, holderAttempts: [], diagnostics: simOutcome.diagnostics };
+  }
+
+  const holderAttempts = candidateHolders.map((holder) => {
+    const baselineIdx = callTags.findIndex((t) => t.holder === holder.address && t.kind === "baseline");
+    const baseline = decodeTransferOutcome(simOutcome.results[baselineIdx]);
+
+    const sells = pools.map((pool) => {
+      const idx = callTags.findIndex((t) => t.holder === holder.address && t.kind === "sell" && t.pool === pool.address);
+      return { pool: pool.address, ...decodeTransferOutcome(simOutcome.results[idx]) };
+    });
+
+    return { holder: holder.address, baseline, sells };
+  });
+
+  return { status: "simulated", pools, holderAttempts };
 }
 
 function friendlyMessageFor(diagnostic, sourceLabel) {
@@ -307,11 +492,8 @@ async function checkNetworkStatus() {
   const blockscoutResult = await fetchBlockscoutStats();
   attempts.push(blockscoutResult.diagnostic);
 
-  const rpcUrl = CONFIG.rpcUrls[0];
-  const rpcResult = rpcUrl ? await probeRpcUrl(rpcUrl) : null;
-  if (rpcResult) {
-    attempts.push(rpcResult.diagnostic);
-  }
+  const workerResult = await probeWorker();
+  attempts.push(workerResult.diagnostic);
 
   networkNameEl.textContent = CONFIG.chainName;
 
@@ -319,40 +501,40 @@ async function checkNetworkStatus() {
     networkChainIdEl.textContent = String(CONFIG.chainId);
     networkBlockNumberEl.textContent = String(blockscoutResult.totalBlocks);
 
-    if (rpcResult?.ok && rpcResult.chainId !== CONFIG.chainId) {
-      networkSourceEl.textContent = `${BLOCKSCOUT_SOURCE} (RPC secondary ignored — chain ID mismatch)`;
-      networkConnectionStatusEl.textContent = "Connected (RPC mismatch)";
+    if (workerResult.ok && workerResult.chainId !== CONFIG.chainId) {
+      networkSourceEl.textContent = `${BLOCKSCOUT_SOURCE} (${WORKER_SOURCE} secondary ignored — chain ID mismatch)`;
+      networkConnectionStatusEl.textContent = `Connected (${WORKER_SOURCE} mismatch)`;
       networkConnectionStatusEl.className = "status-bad";
-      networkErrorEl.textContent = `RPC secondary returned chain ID ${rpcResult.chainId}, expected ${CONFIG.chainId}. Using ${BLOCKSCOUT_SOURCE} only.`;
+      networkErrorEl.textContent = `${WORKER_SOURCE} secondary returned chain ID ${workerResult.chainId}, expected ${CONFIG.chainId}. Using ${BLOCKSCOUT_SOURCE} only.`;
       networkErrorEl.hidden = false;
       showNetworkTechDetails(attempts);
       networkRetryButton.hidden = false;
       return;
     }
 
-    networkSourceEl.textContent = rpcResult?.ok ? `${BLOCKSCOUT_SOURCE} + RPC (secondary, confirmed)` : BLOCKSCOUT_SOURCE;
+    networkSourceEl.textContent = workerResult.ok ? `${BLOCKSCOUT_SOURCE} + ${WORKER_SOURCE} (secondary, confirmed)` : BLOCKSCOUT_SOURCE;
     networkConnectionStatusEl.textContent = "Connected";
     networkConnectionStatusEl.className = "status-ok";
 
     // The primary source is fine — only surface the secondary's own
     // trouble for transparency, not as a page-level error.
-    if (!rpcResult?.ok) {
+    if (!workerResult.ok) {
       showNetworkTechDetails(attempts);
     }
     return;
   }
 
-  // Blockscout (primary) failed — fall back to the optional RPC secondary
-  // so the page can still work.
-  if (rpcResult?.ok) {
-    networkChainIdEl.textContent = String(rpcResult.chainId);
-    networkBlockNumberEl.textContent = rpcResult.blockNumber !== null ? String(rpcResult.blockNumber) : "—";
-    networkSourceEl.textContent = "RPC (secondary — Blockscout API unavailable)";
+  // Blockscout (primary) failed — fall back to the optional Worker
+  // secondary so the page can still work.
+  if (workerResult.ok) {
+    networkChainIdEl.textContent = String(workerResult.chainId);
+    networkBlockNumberEl.textContent = workerResult.blockNumber !== null ? String(workerResult.blockNumber) : "—";
+    networkSourceEl.textContent = `${WORKER_SOURCE} (secondary — Blockscout API unavailable)`;
 
-    if (rpcResult.chainId !== CONFIG.chainId) {
+    if (workerResult.chainId !== CONFIG.chainId) {
       networkConnectionStatusEl.textContent = "Unexpected chain ID";
       networkConnectionStatusEl.className = "status-bad";
-      networkErrorEl.textContent = `The RPC endpoint returned chain ID ${rpcResult.chainId}, expected ${CONFIG.chainId}. Refusing to trust this endpoint.`;
+      networkErrorEl.textContent = `The ${WORKER_SOURCE} returned chain ID ${workerResult.chainId}, expected ${CONFIG.chainId}. Refusing to trust this endpoint.`;
       networkErrorEl.hidden = false;
       showNetworkTechDetails(attempts);
       networkRetryButton.hidden = false;
@@ -361,7 +543,7 @@ async function checkNetworkStatus() {
 
     networkConnectionStatusEl.textContent = "Connected";
     networkConnectionStatusEl.className = "status-ok";
-    networkErrorEl.textContent = `${BLOCKSCOUT_SOURCE} is currently unreachable; showing data from the RPC secondary source instead.`;
+    networkErrorEl.textContent = `${BLOCKSCOUT_SOURCE} is currently unreachable; showing data from the ${WORKER_SOURCE} secondary source instead.`;
     networkErrorEl.hidden = false;
     showNetworkTechDetails(attempts);
     return;
@@ -436,26 +618,90 @@ function resetScanUI() {
   scanResultTitleEl.textContent = "Token";
 }
 
-// Best-effort owner() read over the optional RPC secondary. Blockscout
-// has no generic "owner" field, so this is the only source for it.
-async function tryReadOwner(address) {
-  try {
-    return await publicClient.readContract({ address, abi: OWNER_ABI, functionName: "owner" });
-  } catch {
-    return null;
-  }
-}
-
 function isBenignNotFound(result) {
   return Boolean(result) && !result.ok && result.status === 404;
+}
+
+// A link to this address on the block explorer, built with
+// createElement/textContent only (never innerHTML — address strings come
+// from Blockscout/Worker data).
+function buildBlockscoutAddressLink(address) {
+  const a = document.createElement("a");
+  a.href = `${CONFIG.explorerUrl}/address/${address}`;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.textContent = address;
+  return a;
+}
+
+// The sell-simulation finding's "How this was checked" collapsible: which
+// pools were detected, which holder(s) were used, and which calls
+// succeeded or failed — each address linked to the block explorer.
+function buildSellSimulationEvidence(simulation) {
+  const details = document.createElement("details");
+  details.className = "risk-finding-evidence";
+
+  const summary = document.createElement("summary");
+  summary.textContent = "How this was checked";
+  details.appendChild(summary);
+
+  const poolsPara = document.createElement("p");
+  poolsPara.append("Pools detected: ");
+  if (simulation.pools.length === 0) {
+    poolsPara.append("none");
+  } else {
+    simulation.pools.forEach((pool, i) => {
+      if (i > 0) poolsPara.append(", ");
+      poolsPara.appendChild(buildBlockscoutAddressLink(pool.address));
+    });
+  }
+  details.appendChild(poolsPara);
+
+  if (simulation.holderAttempts.length === 0) {
+    const note = document.createElement("p");
+    note.textContent = "No transfer simulation was run.";
+    details.appendChild(note);
+    return details;
+  }
+
+  for (const attempt of simulation.holderAttempts) {
+    const holderDiv = document.createElement("div");
+    holderDiv.className = "evidence-holder";
+
+    const holderPara = document.createElement("p");
+    holderPara.append("Holder tested: ");
+    holderPara.appendChild(buildBlockscoutAddressLink(attempt.holder));
+    holderDiv.appendChild(holderPara);
+
+    const list = document.createElement("ul");
+
+    const baselineLi = document.createElement("li");
+    baselineLi.textContent = `Baseline transfer to probe address — ${attempt.baseline.success ? "succeeded" : "failed"}: ${attempt.baseline.reason}`;
+    list.appendChild(baselineLi);
+
+    for (const sell of attempt.sells) {
+      const li = document.createElement("li");
+      li.append("Sell-like transfer to pool ");
+      li.appendChild(buildBlockscoutAddressLink(sell.pool));
+      li.append(` — ${sell.success ? "succeeded" : "failed"}: ${sell.reason}`);
+      list.appendChild(li);
+    }
+
+    holderDiv.appendChild(list);
+    details.appendChild(holderDiv);
+  }
+
+  return details;
 }
 
 // Renders the Risk Score v1 summary: an overall-level badge, the fixed
 // disclaimer, then findings grouped by outcome (High/Medium/Low risk,
 // then Passed, then Info / unknown — see groupKeyFor). Built with
 // createElement/textContent only — nothing here is ever inserted as HTML,
-// since finding text can echo Blockscout/RPC data.
-function renderRiskSummary(overallLevel, findings) {
+// since finding text can echo Blockscout/RPC/Worker data. `sellSimulation`
+// (optional) is the raw honeypot-check result, used only to build the
+// "How this was checked" panel under that one finding.
+function renderRiskSummary(overallLevel, findings, sellSimulation) {
   riskLevelValueEl.textContent = overallLevel;
   riskLevelValueEl.className = `risk-level-value risk-level-${overallLevel.toLowerCase().replace(/\s+/g, "-")}`;
 
@@ -484,6 +730,11 @@ function renderRiskSummary(overallLevel, findings) {
       detail.textContent = f.detail;
 
       item.append(title, detail);
+
+      if (f.id === "sell-simulation" && sellSimulation && (sellSimulation.pools?.length || sellSimulation.holderAttempts?.length)) {
+        item.appendChild(buildSellSimulationEvidence(sellSimulation));
+      }
+
       section.appendChild(item);
     }
     riskFindingsEl.appendChild(section);
@@ -512,7 +763,7 @@ async function scanToken(rawAddress) {
       fetchBlockscout(`/tokens/${address}`, `${BLOCKSCOUT_SOURCE} — GET /tokens/{address}`),
       fetchBlockscout(`/smart-contracts/${address}`, `${BLOCKSCOUT_SOURCE} — GET /smart-contracts/{address}`),
       fetchBlockscout(`/tokens/${address}/holders`, `${BLOCKSCOUT_SOURCE} — GET /tokens/{address}/holders`),
-      tryReadOwner(address),
+      fetchOwnerViaWorker(address),
     ]);
 
     // The creation transaction's timestamp (for token age) needs the
@@ -619,6 +870,11 @@ async function scanToken(rawAddress) {
     const volume24hUsd = tokenBody?.volume_24h ?? null;
     const marketCapUsd = tokenBody?.circulating_market_cap ?? null;
 
+    // Sell-simulation honeypot check — its own eth_call round trips
+    // through the Worker (pool detection, then the transfer simulations),
+    // run after the holders data it depends on is available.
+    const sellSimulation = await runSellSimulation(address, holders);
+
     const { overallLevel, findings } = scoreToken({
       isVerified,
       abi,
@@ -630,9 +886,10 @@ async function scanToken(rawAddress) {
       holdersCount,
       createdAtIso,
       owner,
+      sellSimulation,
       marketData: { priceUsd, volume24hUsd, marketCapUsd },
     });
-    renderRiskSummary(overallLevel, findings);
+    renderRiskSummary(overallLevel, findings, sellSimulation);
 
     scanResultTitleEl.textContent = name && symbol ? `${name} (${symbol})` : name || (symbol ? `(${symbol})` : "Token");
 
@@ -656,7 +913,7 @@ async function scanToken(rawAddress) {
 
     resultHoldersEl.textContent = holdersCount === null ? UNAVAILABLE : formatCount(holdersCount);
     resultVerifiedEl.textContent = isVerified === null ? UNAVAILABLE : isVerified ? "Yes" : "No";
-    resultOwnerEl.textContent = owner ? `${owner} (via RPC secondary)` : UNAVAILABLE;
+    resultOwnerEl.textContent = owner ? `${owner} (via ${WORKER_SOURCE})` : UNAVAILABLE;
 
     // Full-precision values here (vs. the compact $867.6M-style figures in
     // the risk finding above) — see MARKET_DATA_ASSUMED_CURRENCY for why
@@ -668,7 +925,7 @@ async function scanToken(rawAddress) {
     resultMarketCapEl.textContent =
       marketCapUsd != null ? `${currencyPrefix}${addThousandsSeparators(formatPriceUsd(marketCapUsd))}` : UNAVAILABLE;
 
-    resultSourceEl.textContent = owner ? `${BLOCKSCOUT_SOURCE} + RPC (secondary, owner)` : BLOCKSCOUT_SOURCE;
+    resultSourceEl.textContent = owner ? `${BLOCKSCOUT_SOURCE} + ${WORKER_SOURCE} (secondary, owner)` : BLOCKSCOUT_SOURCE;
 
     scanResultEl.hidden = false;
 

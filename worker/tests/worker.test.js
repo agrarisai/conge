@@ -170,6 +170,25 @@ test("validateRequest: disallowed method is Method not found (-32601), exactly a
   assert.equal(result.error.error.code, -32601);
 });
 
+// Confirms the Worker already forwards eth_call's "from" field, end to
+// end through the exact code path handleRpc() uses (validateRequest ->
+// .request.params), without altering it. This is a *verification* test,
+// not a regression test for a bug — see the "from" section of the main
+// PR description for why this matters (a sell-simulation honeypot check
+// needs to simulate a transfer as if a specific holder sent it).
+test('validateRequest: eth_call\'s "from" field survives normalization unchanged, ready to forward upstream', () => {
+  const result = validateRequest({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "eth_call",
+    params: [{ to: VALID_ADDRESS, from: OTHER_ADDRESS, data: "0xa9059cbb" }, "latest"],
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.request.params[0].from, OTHER_ADDRESS);
+  assert.equal(result.request.params[0].to, VALID_ADDRESS);
+  assert.equal(result.request.params[0].data, "0xa9059cbb");
+});
+
 test("validateRequest: every allowed method is actually accepted end-to-end", () => {
   const validParamsByMethod = {
     eth_chainId: [],
