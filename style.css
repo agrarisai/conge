@@ -58,7 +58,7 @@ body {
 .logo {
   display: block;
   flex-shrink: 0;
-  border-radius: 8px;
+  width: auto;
 }
 
 .brand h1 {

@@ -120,6 +120,42 @@ test("scoreHolderConcentration: top10 > 80% is medium", () => {
   assert.equal(top10.severity, SEVERITY.MEDIUM);
 });
 
+test("scoreHolderConcentration: merges top1 and top10 into one finding when both are medium", () => {
+  const holders = [
+    { address: "0x1111111111111111111111111111111111111a", valueRaw: "300" },
+    ...Array.from({ length: 9 }, (_, i) => ({
+      address: "0x" + (100 + i).toString(16).padStart(40, "0"),
+      valueRaw: "60",
+    })),
+  ];
+  // top1 = 300/1000 = 30% (medium, >20%); top10 = (300 + 9*60)/1000 = 84% (medium, >80%).
+  const findings = scoreHolderConcentration(holders, "1000");
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].id, "holder-concentration");
+  assert.equal(findings[0].severity, SEVERITY.MEDIUM);
+  assert.match(findings[0].title, /30%/);
+  assert.match(findings[0].title, /84%/);
+});
+
+test("scoreHolderConcentration: does not merge when severities differ (high top1, medium top10)", () => {
+  const holders = [
+    { address: "0x1111111111111111111111111111111111111a", valueRaw: "600" },
+    { address: "0x2222222222222222222222222222222222222b", valueRaw: "400" },
+  ];
+  const findings = scoreHolderConcentration(holders, "1000");
+  assert.equal(findings.length, 2);
+  assert.equal(findings[0].id, "holder-top1");
+  assert.equal(findings[1].id, "holder-top10");
+});
+
+test("scoreHolderConcentration: does not merge two clean (info) findings — nothing was exceeded", () => {
+  const holders = [{ address: "0x1111111111111111111111111111111111111a", valueRaw: "50" }];
+  const findings = scoreHolderConcentration(holders, "1000");
+  assert.equal(findings.length, 2);
+  assert.equal(findings[0].severity, SEVERITY.INFO);
+  assert.equal(findings[1].severity, SEVERITY.INFO);
+});
+
 // --- Check 3: holder count ------------------------------------------------
 
 test("scoreHolderCount thresholds", () => {
@@ -202,7 +238,10 @@ test("scoreOwnerPrivileges: mint is medium, proxy upgrade is high", () => {
 // --- Check 6: owner status ---------------------------------------------
 
 test("scoreOwnerStatus", () => {
-  assert.equal(scoreOwnerStatus(null).known, false);
+  const unknown = scoreOwnerStatus(null);
+  assert.equal(unknown.known, false);
+  assert.doesNotMatch(unknown.detail, /RPC/i);
+
   assert.match(scoreOwnerStatus(ZERO_ADDRESS).title, /renounced/i);
   assert.match(scoreOwnerStatus("0x1111111111111111111111111111111111111a").title, /Owned by/);
 });

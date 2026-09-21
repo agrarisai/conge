@@ -56,6 +56,9 @@ Blockscout API works fine from the same devices.
 - **Risk Score v1** — every scan of a contract also runs a transparent,
   rule-based risk check (see below) and shows a summary card — overall
   level, then findings grouped by severity — above the token details.
+  The result card's title shows the token's `Name (SYMBOL)` when both are
+  known, falling back to whichever one is available, or "Token" if
+  neither is.
 
 ## Risk Score v1
 
@@ -80,7 +83,7 @@ independently."*
 | # | Check | Data source | Thresholds |
 |---|-------|--------------|------------|
 | 1 | Source code verified | Blockscout `is_verified` | Unverified → **High**; also blocks checks 5 (owner privileges) |
-| 2 | Holder concentration (top 1 / top 10) | Blockscout `GET /tokens/{address}/holders`, zero/burn addresses excluded | Top 1 **>50% High**, **>20% Medium**; Top 10 **>80% Medium** |
+| 2 | Holder concentration (top 1 / top 10) | Blockscout `GET /tokens/{address}/holders`, zero/burn addresses excluded | Top 1 **>50% High**, **>20% Medium**; Top 10 **>80% Medium**. Shown as one finding with both percentages when top 1 and top 10 land on the same (Medium) severity — otherwise as two |
 | 3 | Holder count | Blockscout `holders_count` | **<10 High**, **<100 Medium** |
 | 4 | Token age | Creation tx timestamp (`GET /transactions/{hash}`) | **<24h High**, **<7 days Medium** |
 | 5 | Owner privileges (verified contracts only) | ABI from `GET /smart-contracts/{address}` — name-matched for mint / pause / blacklist·blocklist / setFee·setTax / setMaxTx·setMaxWallet / upgradeTo, plus `proxy_type` | Each detected privilege listed as its own finding (severities in `THRESHOLDS.ownerPrivilegeSeverity`, tune freely — proxy upgrade defaults to High, most others Medium) |
@@ -142,7 +145,7 @@ style.css            # styling (mobile-first, light theme)
 app.js               # app logic (ES module, imports viem + scoring.js)
 scoring.js           # Risk Score v1 — pure, rule-based scoring functions
 tests/scoring.test.js  # unit tests for scoring.js (node --test)
-assets/              # place a logo here (e.g. assets/logo.svg)
+assets/              # brand imagery — see "Branding assets" below
 ```
 
 ## Local setup
@@ -183,11 +186,33 @@ To run the risk-scoring unit tests: `node --test tests/scoring.test.js`
 No build step is needed since this is a static site — GitHub Pages serves
 the files as-is.
 
-## Adding a logo
+This repo is currently deployed at `https://agrarisai.github.io/conge/`,
+which is hardcoded into the absolute URLs in `index.html`'s Open Graph /
+Twitter card tags (see [Branding assets](#branding-assets)). If you fork
+or rename this repo, update those URLs to match the new address.
 
-Drop a logo file into `assets/` (e.g. `assets/logo.svg`) and it will
-appear in the header automatically. If no logo is present, the header
-simply omits the image.
+## Branding assets
+
+All brand imagery lives in `assets/` and is used as-is (never modified by
+this codebase):
+
+- `assets/conge-mark.png` — the bird mark, shown in the header next to
+  the "Conge" wordmark (`index.html`'s `.logo` image). It's non-square
+  (858×494); the CSS only constrains height, so it keeps its aspect ratio
+  rather than being stretched into a box.
+- `assets/favicon-512.png` — the site favicon (`<link rel="icon">`).
+- `assets/apple-touch-icon.png` — the icon iOS uses when the site is
+  added to a home screen (`<link rel="apple-touch-icon">`).
+- `assets/social-preview-1200x630.png` — the Open Graph / Twitter card
+  image shown when a link to the site is shared. Referenced with an
+  **absolute** URL (`https://agrarisai.github.io/conge/assets/...`), since
+  the crawlers that read these tags don't resolve relative URLs against
+  the page the way a browser does. If this site is ever moved to a
+  different URL, update `og:url`/`og:image`/`twitter:image` in
+  `index.html` to match.
+
+To replace any of these, just overwrite the file in `assets/` — no code
+changes needed as long as the filename stays the same.
 
 ## Troubleshooting network connectivity
 
