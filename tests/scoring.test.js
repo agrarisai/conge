@@ -25,6 +25,14 @@ import {
   scoreProxyUpgrade,
   scoreOwnerPrivileges,
   scoreOwnerStatus,
+  SELECTOR,
+  padAddressArg,
+  padUintArg,
+  encodeTransferCallData,
+  decodeAddressResult,
+  decodeBoolResult,
+  decodeTransferOutcome,
+  scoreSellSimulation,
   scoreMarketData,
   computeOverallLevel,
   scoreToken,
@@ -427,7 +435,215 @@ test("scoreOwnerStatus", () => {
   assert.match(scoreOwnerStatus("0x1111111111111111111111111111111111111a").title, /Owned by/);
 });
 
-// --- Check 7: market data --------------------------------------------------
+// --- ABI helpers (hand-rolled, no dependency) ---------------------------
+
+const HOLDER = "0x111111111111111111111111111111111111111a";
+const POOL = "0x222222222222222222222222222222222222222b";
+const TOKEN = "0x333333333333333333333333333333333333333c";
+const OTHER_TOKEN = "0x444444444444444444444444444444444444444d";
+
+test("SELECTOR matches the well-known 4-byte selectors given in the spec", () => {
+  assert.deepEqual(SELECTOR, {
+    transfer: "0xa9059cbb",
+    owner: "0x8da5cb5b",
+    token0: "0x0dfe1681",
+    token1: "0xd21220a7",
+  });
+});
+
+test("padAddressArg left-pads a 20-byte address into a 32-byte word", () => {
+  const padded = padAddressArg(HOLDER);
+  assert.equal(padded.length, 64);
+  assert.equal(padded, "0".repeat(24) + HOLDER.slice(2).toLowerCase());
+  assert.doesNotThrow(() => padAddressArg(HOLDER.toUpperCase().replace("0X", "0x")));
+});
+
+test("padAddressArg rejects malformed addresses", () => {
+  assert.throws(() => padAddressArg("not-an-address"));
+  assert.throws(() => padAddressArg(HOLDER.slice(0, -2))); // too short
+});
+
+test("padUintArg left-pads an integer into a 32-byte word, accepting bigint/number/string", () => {
+  assert.equal(padUintArg(0n), "0".repeat(64));
+  assert.equal(padUintArg(1n), "0".repeat(63) + "1");
+  assert.equal(padUintArg(255), "0".repeat(62) + "ff");
+  assert.equal(padUintArg("16"), "0".repeat(62) + "10");
+});
+
+test("padUintArg rejects negative values", () => {
+  assert.throws(() => padUintArg(-1n));
+});
+
+test("encodeTransferCallData builds transfer(address,uint256) calldata", () => {
+  const data = encodeTransferCallData(POOL, 1000n);
+  assert.equal(data.slice(0, 10), SELECTOR.transfer);
+  assert.equal(data.length, 10 + 64 + 64); // selector + 2 words
+  assert.equal(data, SELECTOR.transfer + padAddressArg(POOL) + padUintArg(1000n));
+});
+
+test("decodeAddressResult extracts a clean single-word address", () => {
+  const word = "0x" + "0".repeat(24) + POOL.slice(2).toLowerCase();
+  assert.equal(decodeAddressResult(word), POOL.toLowerCase());
+});
+
+test("decodeAddressResult rejects malformed or non-address data", () => {
+  assert.equal(decodeAddressResult("0x"), null); // empty
+  assert.equal(decodeAddressResult("0x1234"), null); // too short
+  assert.equal(decodeAddressResult(null), null);
+  // Upper 12 bytes not zero -> not a clean address encoding.
+  const dirty = "0x" + "1".repeat(24) + POOL.slice(2).toLowerCase();
+  assert.equal(decodeAddressResult(dirty), null);
+});
+
+test("decodeBoolResult reads a nonzero word as true, all-zero as false", () => {
+  assert.equal(decodeBoolResult("0x" + "0".repeat(64)), false);
+  assert.equal(decodeBoolResult("0x" + "0".repeat(63) + "1"), true);
+  assert.equal(decodeBoolResult("0x"), null); // too short
+});
+
+test("decodeTransferOutcome: a revert/RPC error is always a failure", () => {
+  const outcome = decodeTransferOutcome({ ok: false, result: null, errorMessage: "execution reverted: blacklisted" });
+  assert.equal(outcome.success, false);
+  assert.match(outcome.reason, /blacklisted/);
+});
+
+test("decodeTransferOutcome: a returned false is a failure", () => {
+  const outcome = decodeTransferOutcome({ ok: true, result: "0x" + "0".repeat(64) });
+  assert.equal(outcome.success, false);
+});
+
+test("decodeTransferOutcome: a returned true is a success", () => {
+  const outcome = decodeTransferOutcome({ ok: true, result: "0x" + "0".repeat(63) + "1" });
+  assert.equal(outcome.success, true);
+});
+
+test("decodeTransferOutcome: empty returndata is treated as success (non-standard tokens)", () => {
+  assert.equal(decodeTransferOutcome({ ok: true, result: "0x" }).success, true);
+  assert.equal(decodeTransferOutcome({ ok: true, result: "0x0" }).success, true);
+  assert.equal(decodeTransferOutcome({ ok: true, result: undefined }).success, true);
+});
+
+// --- Check 7: sell-simulation honeypot check ----------------------------
+// Required fixtures: blocked sell, restricted transfers, passed, no pool,
+// Worker down.
+
+test("scoreSellSimulation: Worker down -> Unknown, never counted as a pass", () => {
+  const f = scoreSellSimulation({ status: "unreachable" });
+  assert.equal(f.known, false);
+  assert.equal(f.severity, SEVERITY.INFO);
+  assert.match(f.title, /unknown/i);
+});
+
+test("scoreSellSimulation: undefined simulation (facts.sellSimulation never set) behaves like Worker down", () => {
+  const f = scoreSellSimulation(undefined);
+  assert.equal(f.known, false);
+});
+
+test("scoreSellSimulation: no pool found -> Unknown-flavored info, not a pass", () => {
+  const f = scoreSellSimulation({ status: "no-pool", pools: [], holderAttempts: [] });
+  assert.equal(f.known, false);
+  assert.equal(f.severity, SEVERITY.INFO);
+  assert.match(f.title, /no liquidity pool/i);
+});
+
+test("scoreSellSimulation: no eligible holder -> Unknown-flavored info, not a pass", () => {
+  const f = scoreSellSimulation({ status: "no-holder", pools: [{ address: POOL, token0: TOKEN, token1: OTHER_TOKEN }], holderAttempts: [] });
+  assert.equal(f.known, false);
+  assert.match(f.title, /no eligible holder/i);
+});
+
+test("scoreSellSimulation: restricted transfers — baseline fails for every holder -> High", () => {
+  const simulation = {
+    status: "simulated",
+    pools: [{ address: POOL, token0: TOKEN, token1: OTHER_TOKEN }],
+    holderAttempts: [
+      {
+        holder: HOLDER,
+        baseline: { success: false, reason: "transfer() returned false" },
+        sells: [{ pool: POOL, success: false, reason: "transfer() returned false" }],
+      },
+    ],
+  };
+  const f = scoreSellSimulation(simulation);
+  assert.equal(f.known, true);
+  assert.equal(f.severity, SEVERITY.HIGH);
+  assert.match(f.title, /restricted/i);
+});
+
+test("scoreSellSimulation: blocked sell — baseline ok, every pool sell fails -> High", () => {
+  const simulation = {
+    status: "simulated",
+    pools: [{ address: POOL, token0: TOKEN, token1: OTHER_TOKEN }],
+    holderAttempts: [
+      {
+        holder: HOLDER,
+        baseline: { success: true, reason: "transfer() returned true" },
+        sells: [{ pool: POOL, success: false, reason: "execution reverted" }],
+      },
+    ],
+  };
+  const f = scoreSellSimulation(simulation);
+  assert.equal(f.known, true);
+  assert.equal(f.severity, SEVERITY.HIGH);
+  assert.match(f.title, /selling appears blocked/i);
+});
+
+test("scoreSellSimulation: passed — baseline and at least one sell both succeed -> known info, groups as Passed", () => {
+  const simulation = {
+    status: "simulated",
+    pools: [{ address: POOL, token0: TOKEN, token1: OTHER_TOKEN }],
+    holderAttempts: [
+      {
+        holder: HOLDER,
+        baseline: { success: true, reason: "transfer() returned true" },
+        sells: [{ pool: POOL, success: true, reason: "transfer() returned true" }],
+      },
+    ],
+  };
+  const f = scoreSellSimulation(simulation);
+  assert.equal(f.known, true);
+  assert.equal(f.severity, SEVERITY.INFO);
+  assert.match(f.title, /sell simulation passed/i);
+  assert.match(f.detail, /indicator, not a guarantee/i);
+});
+
+test("scoreSellSimulation: passed if ANY tried holder's sell succeeds, even if another holder's baseline failed", () => {
+  const simulation = {
+    status: "simulated",
+    pools: [{ address: POOL, token0: TOKEN, token1: OTHER_TOKEN }],
+    holderAttempts: [
+      {
+        holder: HOLDER,
+        baseline: { success: false, reason: "blacklisted" },
+        sells: [{ pool: POOL, success: false, reason: "blacklisted" }],
+      },
+      {
+        holder: "0x5555555555555555555555555555555555555e",
+        baseline: { success: true, reason: "ok" },
+        sells: [{ pool: POOL, success: true, reason: "ok" }],
+      },
+    ],
+  };
+  const f = scoreSellSimulation(simulation);
+  assert.equal(f.severity, SEVERITY.INFO);
+  assert.match(f.title, /passed/i);
+});
+
+test("scoreSellSimulation never affects overall level when it's the only High-severity-looking thing but is Unknown", () => {
+  const now = new Date("2024-06-01T00:00:00Z");
+  const { overallLevel } = scoreToken({
+    isVerified: true,
+    holders: [{ address: HOLDER, valueRaw: "10" }],
+    totalSupplyRaw: "10000",
+    holdersCount: 500,
+    createdAtIso: new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000).toISOString(),
+    sellSimulation: { status: "unreachable" },
+    now,
+  });
+  assert.equal(overallLevel, "Low");
+});
+
+// --- Check 8: market data --------------------------------------------------
 
 test("scoreMarketData never affects the overall level", () => {
   const known = scoreMarketData({ priceUsd: "1.23" });

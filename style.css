@@ -316,6 +316,37 @@ input[type="text"]:focus {
   border-left-style: dashed;
 }
 
+.risk-finding-evidence {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+}
+
+.risk-finding-evidence summary {
+  cursor: pointer;
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+.risk-finding-evidence p,
+.risk-finding-evidence ul {
+  margin: 0.35rem 0 0;
+}
+
+.risk-finding-evidence ul {
+  padding-left: 1.1rem;
+}
+
+.risk-finding-evidence a {
+  color: inherit;
+  word-break: break-all;
+}
+
+.evidence-holder {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--color-border);
+}
+
 .result-card h3 {
   margin-top: 0;
   font-size: 1rem;
