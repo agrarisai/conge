@@ -38,19 +38,82 @@ Blockscout API works fine from the same devices.
   [Troubleshooting network connectivity](#troubleshooting-network-connectivity)
   below. A **Retry connection** button re-runs the whole check.
 - **Scan a token** — enter a contract address and Conge looks it up via
-  three Blockscout endpoints in parallel: `GET /addresses/{address}` (is
+  Blockscout endpoints called in parallel: `GET /addresses/{address}` (is
   it a contract, is it verified), `GET /tokens/{address}` (name, symbol,
-  decimals, total supply, holder count — 404 here just means "not a
-  recognized token", not an error), and `GET /smart-contracts/{address}`
-  (verification status). If the optional RPC secondary is reachable, it's
+  decimals, total supply, holder count, market data — 404 here just means
+  "not a recognized token", not an error), `GET /smart-contracts/{address}`
+  (verification status and, when verified, the ABI), and
+  `GET /tokens/{address}/holders` (top holder balances). A follow-up call
+  to `GET /transactions/{creation_transaction_hash}` gets the contract's
+  deployment timestamp. If the optional RPC secondary is reachable, it's
   additionally used for one thing Blockscout has no generic field for:
   reading the contract's `owner()`. Every field that couldn't be
   determined shows **"Unavailable"** rather than a guess, and the result
   card's **Data source** row says exactly which source(s) contributed.
   If any Blockscout request fails outright (not a "not found"), a
   collapsible **Technical details** panel shows the real error for each
-  request that was made. No risk scoring yet — this is planned for a
-  future version.
+  request that was made.
+- **Risk Score v1** — every scan of a contract also runs a transparent,
+  rule-based risk check (see below) and shows a summary card — overall
+  level, then findings grouped by severity — above the token details.
+
+## Risk Score v1
+
+Every scan of an address that turns out to be a contract runs seven
+checks, each producing one or more **findings** — a severity
+(`info` / `low` / `medium` / `high`), a one-line title, and a short
+"why it matters" explanation. Findings are transparent and rule-based:
+no model, no hidden scoring, no weighting you can't read in
+[`scoring.js`](./scoring.js). If a check's data isn't available, its
+finding is marked **Unknown** (shown with a distinct dashed/gray style)
+— Unknown is never counted as a pass, and never contributes evidence
+toward a "Low" verdict.
+
+The **overall level** — `Low` / `Medium` / `High` / `Insufficient data`
+— is the worst known severity among the level-relevant findings (market
+data is informational only and never affects it); if too few checks
+produced any data at all, the verdict is `Insufficient data` rather than
+a guess. Conge never uses the words "safe" or "secure", and always shows:
+*"Automated checks can miss scams. Not financial advice. Verify
+independently."*
+
+| # | Check | Data source | Thresholds |
+|---|-------|--------------|------------|
+| 1 | Source code verified | Blockscout `is_verified` | Unverified → **High**; also blocks checks 5 (owner privileges) |
+| 2 | Holder concentration (top 1 / top 10) | Blockscout `GET /tokens/{address}/holders`, zero/burn addresses excluded | Top 1 **>50% High**, **>20% Medium**; Top 10 **>80% Medium** |
+| 3 | Holder count | Blockscout `holders_count` | **<10 High**, **<100 Medium** |
+| 4 | Token age | Creation tx timestamp (`GET /transactions/{hash}`) | **<24h High**, **<7 days Medium** |
+| 5 | Owner privileges (verified contracts only) | ABI from `GET /smart-contracts/{address}` — name-matched for mint / pause / blacklist·blocklist / setFee·setTax / setMaxTx·setMaxWallet / upgradeTo, plus `proxy_type` | Each detected privilege listed as its own finding (severities in `THRESHOLDS.ownerPrivilegeSeverity`, tune freely — proxy upgrade defaults to High, most others Medium) |
+| 6 | Owner status | RPC secondary `owner()` read | Informational: shows the owner, or "Ownership renounced" if it's the zero address |
+| 7 | Market data | Blockscout `exchange_rate` / `volume_24h` / `circulating_market_cap` | Informational only — shown but never affects the overall level |
+
+**Limits, by design:**
+- Check 5 is a **name-based ABI scan, not a bytecode or semantics audit**
+  — a differently-named function with the same effect won't be caught,
+  and a function with an alarming name doesn't prove it's actually
+  dangerous. It only runs at all when the contract is verified.
+- Check 2 only looks at the first page of `/tokens/{address}/holders`
+  (Blockscout's default page size), which comfortably covers "top 10"
+  but isn't a full holder census.
+- Check 6 depends entirely on the *optional* RPC secondary and on the
+  contract exposing a standard `owner()` view function — very often
+  "Unknown", which is expected and shown honestly rather than guessed.
+- None of this is an audit or a guarantee. It's a fast, transparent
+  read of public on-chain and block-explorer data — always verify
+  independently before acting on it.
+
+`scoring.js` is a standalone module of pure functions (no network calls,
+no DOM) with a `THRESHOLDS` table at the top — edit the numbers there to
+retune any check without touching `app.js`. See
+[`tests/scoring.test.js`](./tests/scoring.test.js) for the full set of
+sample inputs/outputs, runnable with:
+
+```bash
+node --test tests/scoring.test.js
+```
+
+(uses Node's built-in test runner — no npm install needed, consistent
+with the rest of this project.)
 
 ## Tech
 
@@ -66,14 +129,20 @@ Blockscout API works fine from the same devices.
   RPC endpoint here once you've verified it exists and actually allows
   browser requests from this site's origin (see below) — don't add
   unverified URLs.
+- Risk scoring logic lives in `scoring.js`, a separate module of pure
+  functions imported by `app.js` — `app.js` gathers "facts" from
+  Blockscout/RPC and hands them to `scoreToken()`, which does no I/O of
+  its own (that's what makes it unit-testable without mocking a network).
 
 ## Project structure
 
 ```
-index.html   # page structure
-style.css    # styling (mobile-first, light theme)
-app.js       # app logic (ES module, imports viem from a CDN)
-assets/      # place a logo here (e.g. assets/logo.svg)
+index.html          # page structure
+style.css            # styling (mobile-first, light theme)
+app.js               # app logic (ES module, imports viem + scoring.js)
+scoring.js           # Risk Score v1 — pure, rule-based scoring functions
+tests/scoring.test.js  # unit tests for scoring.js (node --test)
+assets/              # place a logo here (e.g. assets/logo.svg)
 ```
 
 ## Local setup
@@ -95,6 +164,9 @@ npx serve .
 ```
 
 Then open `http://localhost:8000` in your browser.
+
+To run the risk-scoring unit tests: `node --test tests/scoring.test.js`
+(see [Risk Score v1](#risk-score-v1) above).
 
 ## Deploying to GitHub Pages
 
@@ -190,15 +262,20 @@ Fetch API only ever reports a generic `Failed to fetch` for this case.
 > above nor the exact Blockscout API v2 response field names could be
 > verified from this environment. The field names used in `app.js`
 > (`total_blocks`, `is_contract`, `is_verified`, `name`, `symbol`,
-> `decimals`, `total_supply`, `holders_count`/`holders`) are based on the
-> documented/standard Blockscout API v2 schema, with a couple of
-> defensive fallbacks (e.g. accepting either `holders_count` or `holders`)
-> for fields most likely to vary between Blockscout versions. Every field
-> that isn't present in the response is shown as "Unavailable" rather
-> than guessed — please verify against the live API
-> (`curl https://robinhoodchain.blockscout.com/api/v2/tokens/<address>`)
-> and adjust the field names in `fetchBlockscout`'s callers in `app.js` if
-> any of them turn out to be wrong for this instance.
+> `decimals`, `total_supply`, `holders_count`/`holders`, `exchange_rate`,
+> `volume_24h`, `circulating_market_cap`, `creation_transaction_hash`/
+> `creation_tx_hash`, `timestamp`, `abi`, `proxy_type`, and the
+> `/tokens/{address}/holders` items' `address.hash`/`value`) are based on
+> the documented/standard Blockscout API v2 schema, with defensive
+> fallbacks where I was least confident. Every field that isn't present
+> in the response is shown as "Unavailable" (or, for Risk Score v1,
+> "Unknown" — see below) rather than guessed — please verify against the
+> live API (`curl https://robinhoodchain.blockscout.com/api/v2/tokens/<address>`,
+> `.../addresses/<address>`, `.../smart-contracts/<address>`,
+> `.../tokens/<address>/holders`, and `.../transactions/<hash>` for a
+> known creation tx) and adjust the field names in `app.js`'s
+> `scanToken()` if any of them turn out to be wrong for this instance —
+> `scoring.js` itself takes plain facts and doesn't need to change.
 
 ### If the Blockscout API also blocks browser requests
 

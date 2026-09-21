@@ -7,6 +7,8 @@ import {
   formatUnits,
 } from "https://esm.sh/viem@2.21.19";
 
+import { scoreToken, SEVERITY_ORDER } from "./scoring.js";
+
 // Single source of truth for chain/explorer/RPC configuration.
 //
 // The Blockscout API v2 (explorerApiUrl) is the PRIMARY data source for
@@ -385,6 +387,9 @@ const scanResultEl = document.getElementById("scan-result");
 const scanTechDetailsEl = document.getElementById("scan-tech-details");
 const scanTechDetailsContentEl = document.getElementById("scan-tech-details-content");
 
+const riskLevelValueEl = document.getElementById("risk-level-value");
+const riskFindingsEl = document.getElementById("risk-findings");
+
 const resultAddressEl = document.getElementById("result-address");
 const resultIsContractEl = document.getElementById("result-is-contract");
 const resultNameEl = document.getElementById("result-name");
@@ -398,11 +403,14 @@ const resultSourceEl = document.getElementById("result-source");
 
 const UNAVAILABLE = "Unavailable";
 
+const SEVERITY_GROUP_LABEL = { high: "High risk", medium: "Medium risk", low: "Low risk", info: "Info" };
+
 function resetScanUI() {
   addressErrorEl.hidden = true;
   scanErrorEl.hidden = true;
   scanResultEl.hidden = true;
   scanTechDetailsEl.hidden = true;
+  riskFindingsEl.innerHTML = "";
 }
 
 // Best-effort owner() read over the optional RPC secondary. Blockscout
@@ -412,6 +420,49 @@ async function tryReadOwner(address) {
     return await publicClient.readContract({ address, abi: OWNER_ABI, functionName: "owner" });
   } catch {
     return null;
+  }
+}
+
+function isBenignNotFound(result) {
+  return Boolean(result) && !result.ok && result.status === 404;
+}
+
+// Renders the Risk Score v1 summary: an overall-level badge, the fixed
+// disclaimer, then findings grouped by severity (highest first). Built
+// with createElement/textContent only — nothing here is ever inserted as
+// HTML, since finding text can echo Blockscout/RPC data.
+function renderRiskSummary(overallLevel, findings) {
+  riskLevelValueEl.textContent = overallLevel;
+  riskLevelValueEl.className = `risk-level-value risk-level-${overallLevel.toLowerCase().replace(/\s+/g, "-")}`;
+
+  riskFindingsEl.innerHTML = "";
+  for (const severity of SEVERITY_ORDER) {
+    const group = findings.filter((f) => f.severity === severity);
+    if (group.length === 0) continue;
+
+    const section = document.createElement("div");
+    section.className = "risk-findings-group";
+
+    const heading = document.createElement("h4");
+    heading.textContent = `${SEVERITY_GROUP_LABEL[severity]} (${group.length})`;
+    section.appendChild(heading);
+
+    for (const f of group) {
+      const item = document.createElement("div");
+      item.className = f.known === false ? "risk-finding risk-finding-unknown" : `risk-finding risk-finding-${severity}`;
+
+      const title = document.createElement("p");
+      title.className = "risk-finding-title";
+      title.textContent = f.title;
+
+      const detail = document.createElement("p");
+      detail.className = "risk-finding-detail";
+      detail.textContent = f.detail;
+
+      item.append(title, detail);
+      section.appendChild(item);
+    }
+    riskFindingsEl.appendChild(section);
   }
 }
 
@@ -432,38 +483,47 @@ async function scanToken(rawAddress) {
   scanButton.textContent = "Scanning…";
 
   try {
-    const [addressResult, tokenResult, contractResult, owner] = await Promise.all([
+    const [addressResult, tokenResult, contractResult, holdersResult, owner] = await Promise.all([
       fetchBlockscout(`/addresses/${address}`, `${BLOCKSCOUT_SOURCE} — GET /addresses/{address}`),
       fetchBlockscout(`/tokens/${address}`, `${BLOCKSCOUT_SOURCE} — GET /tokens/{address}`),
       fetchBlockscout(`/smart-contracts/${address}`, `${BLOCKSCOUT_SOURCE} — GET /smart-contracts/{address}`),
+      fetchBlockscout(`/tokens/${address}/holders`, `${BLOCKSCOUT_SOURCE} — GET /tokens/{address}/holders`),
       tryReadOwner(address),
     ]);
 
-    // 404 on /tokens and /smart-contracts is an expected, valid answer
-    // ("not a token" / "not verified"), not a failure to report.
-    const tokenNotFound = !tokenResult.ok && tokenResult.status === 404;
-    const contractNotVerified = !contractResult.ok && contractResult.status === 404;
+    // The creation transaction's timestamp (for token age) needs the
+    // creation tx hash from /addresses first, so it's a follow-up call.
+    const creationTxHash = addressResult.ok
+      ? (addressResult.body.creation_transaction_hash ?? addressResult.body.creation_tx_hash ?? null)
+      : null;
+    const txResult = creationTxHash
+      ? await fetchBlockscout(`/transactions/${creationTxHash}`, `${BLOCKSCOUT_SOURCE} — GET /transactions/{hash}`)
+      : null;
 
-    const realFailures = [addressResult, tokenResult, contractResult].filter((result) => {
+    const allResults = [addressResult, tokenResult, contractResult, holdersResult, ...(txResult ? [txResult] : [])];
+
+    // 404 on everything but /addresses is an expected, valid answer ("not
+    // a token" / "not verified" / "no holder data"), not a failure.
+    const realFailures = allResults.filter((result) => {
       if (result.ok) return false;
-      if (result === tokenResult && tokenNotFound) return false;
-      if (result === contractResult && contractNotVerified) return false;
-      return true;
+      if (result === addressResult) return true;
+      return !isBenignNotFound(result);
     });
 
     const isContract = addressResult.ok ? Boolean(addressResult.body.is_contract) : null;
+
+    function showTechDetailsIfNeeded() {
+      if (realFailures.length > 0) {
+        renderTechnicalDetails(scanTechDetailsContentEl, allResults.map((r) => ({ ...r.diagnostic, ok: r.ok })));
+        scanTechDetailsEl.hidden = false;
+      }
+    }
 
     if (isContract === false) {
       scanErrorEl.textContent =
         "This address has no contract code (per the Blockscout API). It looks like a regular wallet address, not a token contract.";
       scanErrorEl.hidden = false;
-      if (realFailures.length > 0) {
-        renderTechnicalDetails(
-          scanTechDetailsContentEl,
-          [addressResult, tokenResult, contractResult].map((r) => ({ ...r.diagnostic, ok: r.ok })),
-        );
-        scanTechDetailsEl.hidden = false;
-      }
+      showTechDetailsIfNeeded();
       return;
     }
 
@@ -471,7 +531,7 @@ async function scanToken(rawAddress) {
       ? addressResult.body.is_verified
       : contractResult.ok
         ? true
-        : contractNotVerified
+        : isBenignNotFound(contractResult)
           ? false
           : null;
 
@@ -486,7 +546,37 @@ async function scanToken(rawAddress) {
         : Number(decimalsRaw);
 
     const totalSupplyRaw = tokenBody?.total_supply ?? null;
-    const holdersRaw = tokenBody?.holders_count ?? tokenBody?.holders ?? null;
+    const holdersCount = tokenBody?.holders_count ?? tokenBody?.holders ?? null;
+
+    const holders = holdersResult.ok && Array.isArray(holdersResult.body.items)
+      ? holdersResult.body.items
+          .map((item) => ({ address: item.address?.hash ?? item.address, valueRaw: item.value }))
+          .filter((h) => typeof h.address === "string" && typeof h.valueRaw === "string")
+      : null;
+
+    const abi = contractResult.ok && Array.isArray(contractResult.body.abi) ? contractResult.body.abi : null;
+    const isProxy = Boolean(
+      (contractResult.ok && contractResult.body.proxy_type) || (addressResult.ok && addressResult.body.proxy_type),
+    );
+
+    const createdAtIso = txResult?.ok ? (txResult.body.timestamp ?? null) : null;
+
+    const { overallLevel, findings } = scoreToken({
+      isVerified,
+      abi,
+      isProxy,
+      holders,
+      totalSupplyRaw,
+      holdersCount,
+      createdAtIso,
+      owner,
+      marketData: {
+        priceUsd: tokenBody?.exchange_rate ?? null,
+        volume24hUsd: tokenBody?.volume_24h ?? null,
+        marketCapUsd: tokenBody?.circulating_market_cap ?? null,
+      },
+    });
+    renderRiskSummary(overallLevel, findings);
 
     resultAddressEl.textContent = address;
     resultIsContractEl.textContent = isContract === null ? UNAVAILABLE : isContract ? "Yes" : "No";
@@ -495,7 +585,7 @@ async function scanToken(rawAddress) {
     resultDecimalsEl.textContent = decimals === null ? UNAVAILABLE : String(decimals);
 
     if (totalSupplyRaw === null) {
-      resultTotalSupplyEl.textContent = tokenNotFound ? "Unavailable (not a recognized token)" : UNAVAILABLE;
+      resultTotalSupplyEl.textContent = isBenignNotFound(tokenResult) ? "Unavailable (not a recognized token)" : UNAVAILABLE;
     } else if (decimals === null) {
       resultTotalSupplyEl.textContent = `${totalSupplyRaw} (raw units — decimals unavailable)`;
     } else {
@@ -506,7 +596,7 @@ async function scanToken(rawAddress) {
       }
     }
 
-    resultHoldersEl.textContent = holdersRaw === null ? UNAVAILABLE : String(holdersRaw);
+    resultHoldersEl.textContent = holdersCount === null ? UNAVAILABLE : String(holdersCount);
     resultVerifiedEl.textContent = isVerified === null ? UNAVAILABLE : isVerified ? "Yes" : "No";
     resultOwnerEl.textContent = owner ? `${owner} (via RPC secondary)` : UNAVAILABLE;
 
@@ -514,13 +604,7 @@ async function scanToken(rawAddress) {
 
     scanResultEl.hidden = false;
 
-    if (realFailures.length > 0) {
-      renderTechnicalDetails(
-        scanTechDetailsContentEl,
-        [addressResult, tokenResult, contractResult].map((r) => ({ ...r.diagnostic, ok: r.ok })),
-      );
-      scanTechDetailsEl.hidden = false;
-    }
+    showTechDetailsIfNeeded();
   } finally {
     scanButton.disabled = false;
     scanButton.textContent = "Scan";
