@@ -25,7 +25,11 @@ headers for this site's origin.
 
 ## Features
 
-- **Network status** — fetches `GET /stats` from the Blockscout API and
+- **Network status** — shown as a compact one-line strip (connection
+  state, chain name, latest block); the chain ID, data source, and the
+  diagnostics/self-test tools below are tucked behind a collapsed
+  "Connection details" disclosure, since most visits don't need them —
+  see [Design](#design). Fetches `GET /stats` from the Blockscout API and
   shows `total_blocks` as the latest block, alongside the chain ID and
   name from `CONFIG` (Blockscout's `/stats` doesn't return a chain ID, so
   that value is not independently verified unless the Worker secondary is
@@ -72,11 +76,14 @@ headers for this site's origin.
   limiting (see [Known limitations](#known-limitations)) often succeeds
   on a retry a little later, without retyping the address.
 - **Risk Score v1** — every scan of a contract also runs a transparent,
-  rule-based risk check (see below) and shows a summary card — overall
-  level, then findings grouped by severity — above the token details.
-  The result card's title shows the token's `Name (SYMBOL)` when both are
-  known, falling back to whichever one is available, or "Token" if
-  neither is.
+  rule-based risk check (see below) and shows a summary card — the
+  overall level as a large badge with a one-line plain-language summary
+  (a presentational lookup by the already-computed level, e.g. "No major
+  red flags turned up in these automated checks." for Low — it doesn't
+  change what's computed, only how it reads at a glance), then findings
+  grouped by severity — above the token details. The result card's title
+  shows the token's `Name (SYMBOL)` when both are known, falling back to
+  whichever one is available, or "Token" if neither is.
 
 ## Risk Score v1
 
@@ -309,6 +316,64 @@ with the rest of this project.)
   Blockscout/the Worker and hands them to `scoreToken()`, which does no
   I/O of its own (that's what makes it unit-testable without mocking a
   network).
+- The three type families (see [Design](#design) below) are loaded via a
+  standard Google Fonts `<link>` in `index.html` — no build step, no npm
+  package, same "just a URL" precedent as the viem CDN import. Every
+  `font-family` declaration in `style.css` lists system-font fallbacks
+  first in the stack's logic (the custom fonts are *appended*, not
+  required), so the page renders correctly with plain system fonts if
+  that stylesheet is blocked or slow.
+
+## Design
+
+Conge's visual language is deliberately **light, warm, and calm** — not
+a dark "security terminal" look, and not a generic AI-product template
+either. It's built entirely with plain CSS custom properties in
+`style.css` (`:root`), no design-system dependency:
+
+- **Color** — ivory (`--color-bg`, `#FAF9F4`) background, ink
+  (`--color-ink`, `#0F1115`) primary text, slate (`--color-slate`,
+  `#63665F`) secondary text. The brand's signal green
+  (`--color-accent`, `#03FA73`) is reserved for the mark, the primary
+  button, and small status dots/borders — it's **never used as body
+  text**, since it's too light to read reliably on ivory or white (a raw
+  contrast check puts it well under WCAG's 3:1 floor even for large
+  UI elements). Risk severity has its own three-tone system layered on
+  top — green/amber/rose for low/medium/high — but each tone is a
+  **pair**: a pale tint for backgrounds and a separately deepened,
+  contrast-checked shade of the same hue for any text drawn in that
+  color (`--tone-{green,amber,rose}-{bg,text,border}` — every text
+  pairing in this system measures at 4.5:1 or better, most above 6:1).
+  A "Passed" finding is deliberately **neutral**, not green — a clean
+  token shouldn't read as a wall of celebratory color, and green stays
+  meaningful for when it's actually flagging something as low-risk.
+- **Type** — headings in **Space Grotesk** (the same face used in the
+  wordmark), body text in **Inter**, and anything that's data — addresses,
+  amounts, the whole token-details table, every Technical details code
+  block — in **JetBrains Mono**. Only these three families; no arbitrary
+  extras. Sizes step through a small, intentional set of `rem` values
+  rather than one-off pixel numbers, and there's exactly one tracked-out
+  uppercase label on the whole site (the "TOKEN RISK SCANNER" tagline) —
+  deliberately not a pattern repeated for section headings or group
+  labels, which stay sentence case.
+- **Layout** — mobile-first (this is mostly opened on a phone): the
+  Network status card is a compact one-line strip (connection state,
+  chain, latest block) with everything else — chain ID, data source, the
+  Worker self-test, Technical details — tucked behind a "Connection
+  details" disclosure, since most visits don't need it. The result
+  card leads with the overall risk level as the dominant element (a large
+  colored badge plus a one-line plain-language summary), then findings
+  grouped by severity with a colored left border/tint instead of
+  identical grey cards, then a two-column token-details summary (it
+  widens from one label/value pair per row to two side by side once
+  there's room, rather than staying a long single-column stack). No
+  drop shadows, no gradients, no icon decoration, no numbered
+  01/02/03 markers — the hierarchy comes from type, color, and spacing
+  alone.
+- **Focus states** — every interactive element (links, buttons, the
+  address input, `<summary>` disclosures) gets the same visible
+  `:focus-visible` outline in ink, not a color too light to see reliably
+  or a decorative box-shadow.
 
 ## Project structure
 
