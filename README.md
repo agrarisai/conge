@@ -374,18 +374,46 @@ either. It's built entirely with plain CSS custom properties in
   Network status card is a compact one-line strip (connection state,
   chain, latest block) with everything else — chain ID, data source, the
   Worker self-test, Technical details — tucked behind a "Connection
-  details" disclosure, since most visits don't need it. The result
-  card leads with the overall risk level as the dominant element (a large
-  colored badge plus a one-line plain-language summary), then findings
-  grouped by severity with a colored left border/tint instead of
-  identical grey cards, then a two-column token-details summary (it
-  widens from one label/value pair per row to two side by side once
-  there's room, rather than staying a long single-column stack). No
-  drop shadows, no icon decoration, no numbered 01/02/03 markers — the
-  hierarchy comes from type, color, and spacing alone. The one
-  deliberate exception to "no gradients" is the small brand-accent
-  square described above, matching the logo's own art; it's never used
-  as a background wash or decoration anywhere else.
+  details" disclosure, since most visits don't need it. The result card
+  leads with the overall risk level as the dominant element (the gauge
+  described below plus a one-line plain-language summary), then findings
+  as a signal list (see below) instead of colored cards, then a
+  two-column token-details summary (it widens from one label/value pair
+  per row to two side by side once there's room, rather than staying a
+  long single-column stack). No drop shadows, no numbered 01/02/03
+  markers — the hierarchy comes from type, color, spacing, and the one
+  bold gauge, not repeated decoration.
+- **Radar/target motif** — a deliberate second design pass reusing the
+  logo's own concentric-rings-and-dashed-line identity, so the page
+  reads as this brand rather than a generic light SaaS template:
+  - The risk level (previously a flat colored pill) is a semicircular
+    SVG **gauge** — a thin guide ring behind three colored Low/Medium/
+    High zone arcs, with a needle pivoting on an accent-blue hub dot
+    styled like the logo's own center dot. The needle sweeps into
+    position on load/rescan (skipped under `prefers-reduced-motion`) and
+    hides entirely for "Insufficient data" rather than implying a
+    position the data doesn't support. The SVG is `aria-hidden`; the
+    caption below it (unchanged `#risk-level-value` text) is the real,
+    always-present text equivalent.
+  - Findings are a **signal list**: each row gets a small dot + a short
+    two-dash marker (the same rounded-cap dash pattern as the logo's
+    dashed line) colored by severity, in place of the old colored-card-
+    with-left-border treatment; an "Unknown" outcome gets a hollow dot,
+    carrying over the distinction the old dashed left border used to
+    draw. Severity color lives only on the marker, never washed across
+    the text.
+  - A **very faint concentric-ring texture** (`--hero-texture`, a
+    `repeating-radial-gradient` reusing `--color-border` directly rather
+    than a new low-opacity layer) sits behind the header and every
+    page's `.intro` block only — never behind cards or repeated down the
+    page. Contrast-checked: the ring itself measures ~1.2:1 against
+    ivory (i.e., genuinely textural), and ink text over a ring pixel in
+    the worst case still measures ~14.5:1, far above the 4.5:1 body-text
+    floor.
+  - The token **symbol**, where it appears in the result card title, is
+    a small `.token-symbol-tag` — JetBrains Mono, accent blue, CSS
+    `::before`/`::after` brackets — read as a "locked-on" target ID.
+    Restrained to that one spot; not a new badge shape reused elsewhere.
 - **Focus states** — every interactive element (links, buttons, the
   address input, `<summary>` disclosures) gets the same visible
   `:focus-visible` outline in the brand accent blue (a raw contrast
