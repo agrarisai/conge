@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>About — Conge</title>
+  <meta name="description" content="What Conge is, who built it, and why — a small, independent, read-only token risk scanner." />
+
+  <link rel="icon" href="assets/favicon-512.png" type="image/png" sizes="512x512" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Conge" />
+  <meta property="og:title" content="About — Conge" />
+  <meta property="og:description" content="What Conge is, who built it, and why — a small, independent, read-only token risk scanner." />
+  <meta property="og:url" content="https://agrarisai.github.io/conge/about.html" />
+  <meta property="og:image" content="https://agrarisai.github.io/conge/assets/social-preview-1200x630.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="About — Conge" />
+  <meta name="twitter:description" content="What Conge is, who built it, and why — a small, independent, read-only token risk scanner." />
+  <meta name="twitter:image" content="https://agrarisai.github.io/conge/assets/social-preview-1200x630.png" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet"
+  />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <img class="logo" src="assets/conge-mark.png" alt="" height="36" />
+      <div class="brand">
+        <h1>Conge</h1>
+        <p class="tagline">TOKEN RISK SCANNER</p>
+      </div>
+    </div>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="index.html">Home</a>
+      <a href="how-it-works.html">How it works</a>
+      <a href="faq.html">FAQ</a>
+      <a href="about.html" aria-current="page">About</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="intro">
+      <h2 class="intro-headline">About Conge</h2>
+      <p class="intro-sub">What it is, and who's behind it.</p>
+    </div>
+
+    <section class="card">
+      <div class="prose">
+        <p>
+          Conge is a free, read-only risk scanner for tokens on Robinhood Chain. Enter a
+          contract address and it runs a set of transparent, rule-based checks — holder
+          concentration, ownership, whether selling actually works, and more — using only
+          public on-chain and block-explorer data. It never asks for a wallet connection, a
+          signature, or a transaction; see <a href="how-it-works.html">how it works</a> for the
+          full pipeline.
+        </p>
+        <p>
+          Conge is a small, independent project — built and maintained by one person, not a
+          company. There's no team page here because there's no team to introduce: just
+          somebody who wanted a fast, honest way to check a token before trusting it, and
+          figured other people on this chain could use the same thing.
+        </p>
+        <p>
+          <strong>Conge is not affiliated with, endorsed by, or connected to Robinhood
+          Markets, Inc.</strong> in any way. "Robinhood Chain" is simply the network Conge
+          currently supports — the name belongs to its own operator, not to this project.
+        </p>
+        <p>
+          The code is open source — see it, read it, or point out a bug on
+          <a href="https://github.com/agrarisai/conge" target="_blank" rel="noopener noreferrer">GitHub</a>.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-grid">
+      <div class="footer-col footer-col-brand">
+        <div class="footer-brand">
+          <img src="assets/conge-mark.png" alt="" height="24" />
+          <span>Conge</span>
+        </div>
+        <p class="footer-desc">A free, read-only risk scanner for tokens on Robinhood Chain.</p>
+        <p class="footer-disclaimer-short">
+          Read-only, automated checks can miss scams, not financial advice.
+          <a href="disclaimer.html">Full disclaimer</a>.
+        </p>
+      </div>
+      <div class="footer-col">
+        <p class="footer-col-heading">Product</p>
+        <ul class="footer-links">
+          <li><a href="how-it-works.html">How it works</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <p class="footer-col-heading">Resources</p>
+        <ul class="footer-links">
+          <li><a href="https://github.com/agrarisai/conge" target="_blank" rel="noopener noreferrer">GitHub repo</a></li>
+          <li><a href="https://github.com/agrarisai/conge/issues" target="_blank" rel="noopener noreferrer">Report an issue</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <p class="footer-col-heading">Legal</p>
+        <ul class="footer-links">
+          <li><a href="disclaimer.html">Disclaimer</a></li>
+          <li><a href="about.html">About</a></li>
+        </ul>
+      </div>
+    </div>
+    <p class="footer-fine-print">
+      © <span id="footer-year">2026</span> Conge · Not affiliated with Robinhood Markets, Inc. · Always verify
+      independently on the <a href="https://robinhoodchain.blockscout.com" target="_blank" rel="noopener noreferrer">block explorer</a>.
+    </p>
+  </footer>
+
+  <script>
+    document.getElementById("footer-year").textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>
