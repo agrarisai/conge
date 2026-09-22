@@ -92,6 +92,7 @@ summary:focus-visible {
 /* --- Header ----------------------------------------------------------- */
 
 .site-header {
+  position: relative;
   padding: 1.5rem var(--spacing) 1.125rem;
   border-bottom: 1px solid var(--color-border);
 }
@@ -140,16 +141,112 @@ summary:focus-visible {
   vertical-align: middle;
 }
 
+/* --- Nav toggle (hamburger) --------------------------------------------
+   Sits on the right of the header, next to the logo/wordmark on the
+   left. The three bars morph into a close (×) via CSS transforms driven
+   off the button's own aria-expanded state, so the icon swap and the
+   a11y state can never drift out of sync. */
+
+.nav-toggle {
+  flex-shrink: 0;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.nav-toggle:hover {
+  border-color: var(--color-border-strong);
+}
+
+.nav-toggle-icon,
+.nav-toggle-icon::before,
+.nav-toggle-icon::after {
+  display: block;
+  width: 1.1rem;
+  height: 2px;
+  border-radius: 1px;
+  background-color: var(--color-ink);
+  transition: transform 0.18s ease, opacity 0.18s ease, background-color 0.18s ease;
+}
+
+.nav-toggle-icon {
+  position: relative;
+}
+
+.nav-toggle-icon::before,
+.nav-toggle-icon::after {
+  content: "";
+  position: absolute;
+  left: 0;
+}
+
+.nav-toggle-icon::before {
+  top: -6px;
+}
+
+.nav-toggle-icon::after {
+  top: 6px;
+}
+
+.nav-toggle[aria-expanded="true"] .nav-toggle-icon {
+  background-color: transparent;
+}
+
+.nav-toggle[aria-expanded="true"] .nav-toggle-icon::before {
+  top: 0;
+  transform: rotate(45deg);
+}
+
+.nav-toggle[aria-expanded="true"] .nav-toggle-icon::after {
+  top: 0;
+  transform: rotate(-45deg);
+}
+
+/* --- Nav panel ----------------------------------------------------------
+   A dropdown anchored under the toggle button, styled like the rest of
+   the site's surfaces (bordered card, no shadow) rather than a generic
+   browser-default menu. */
+
 .site-nav {
+  position: absolute;
+  top: 100%;
+  right: var(--spacing);
+  z-index: 20;
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 1.1rem;
-  max-width: 640px;
-  margin: 0.9rem auto 0;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 200px;
+  margin-top: 0.5rem;
+  padding: 0.4rem;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.site-nav.is-open {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.site-nav[hidden] {
+  display: none;
 }
 
 .site-nav a {
-  font-size: 0.85rem;
+  padding: 0.6rem 0.7rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
   font-weight: 500;
   color: var(--color-slate);
   text-decoration: none;
@@ -157,15 +254,24 @@ summary:focus-visible {
 
 .site-nav a:hover {
   color: var(--color-ink);
+  background-color: var(--color-bg);
 }
 
 .site-nav a[aria-current="page"] {
   color: var(--color-ink);
   font-weight: 600;
-  text-decoration: underline;
-  text-decoration-color: var(--color-accent);
-  text-decoration-thickness: 2px;
-  text-underline-offset: 3px;
+  background-color: var(--color-bg);
+  border-left: 3px solid var(--color-accent);
+  padding-left: calc(0.7rem - 3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-toggle-icon,
+  .nav-toggle-icon::before,
+  .nav-toggle-icon::after,
+  .site-nav {
+    transition: none;
+  }
 }
 
 /* --- Layout ------------------------------------------------------------ */

@@ -336,8 +336,8 @@ either. It's built entirely with plain CSS custom properties in
   `#63665F`) secondary text. The brand accent is a **signal blue**
   (`--color-accent`, `#0B84F3` — updated from an earlier signal green,
   `#03FA73`, when the logo was replaced with the current target/radar
-  mark): buttons, links, the nav's current-page underline, and focus
-  rings. A raw contrast check on the new blue as small text/a dot came
+  mark): buttons, links, the nav panel's current-page accent border, and
+  focus rings. A raw contrast check on the new blue as small text/a dot came
   in just under 4.5:1, so there's a separately deepened
   `--color-accent-text` (`#0A66B8`, 5.5–5.8:1) for exactly that case —
   currently just the "Connected" network-status text/dot, a brand/
@@ -397,9 +397,10 @@ either. It's built entirely with plain CSS custom properties in
 
 Alongside the scanner itself (`index.html`), the site has four static
 content pages — plain HTML files at the repo root, same
-head/meta/favicon pattern as `index.html`, no build step, no JavaScript
-of their own (they don't load `app.js` — there's no scanning UI on
-them, so none of its DOM lookups apply):
+head/meta/favicon pattern as `index.html`, no build step, and no scanning
+logic of their own (they don't load `app.js` — there's no scanning UI on
+them, so none of its DOM lookups apply). Like every page, they do load
+`nav.js` for the shared header nav toggle — see below.
 
 - **`about.html`** — what Conge is, and a short, honest note on who
   built it: an independent, solo/small project, explicitly **not**
@@ -429,16 +430,28 @@ them, so none of its DOM lookups apply):
   collects no user data or accounts and there'd be nothing real to put
   in one.
 
-**Navigation** is identical on every page: a top nav (Home, How it
-works, FAQ, About — `disclaimer.html` is reachable from the footer, not
-the top nav, matching how it's referenced elsewhere) with the current
-page underlined, and a shared footer with four columns (Brand, Product,
-Resources, Legal) plus a small-print line with the current year (set by
-a couple of inline lines of vanilla JS on each page — no build step, and
-it degrades to whatever static year is already in the markup if that
-JS doesn't run) and the Robinhood-affiliation disclaimer. Both reuse the
-same `style.css` tokens as the redesign — no new colors, fonts, or
-spacing scale introduced for these pages.
+**Navigation** is identical on every page: a hamburger button on the
+right of the header, next to the logo/wordmark, that toggles a dropdown
+panel (Home, How it works, About, FAQ — `disclaimer.html` is reachable
+from the footer, not this menu, matching how it's referenced elsewhere)
+with the current page marked via `aria-current="page"` (styled with a
+left accent border + tinted background rather than the old inline nav's
+underline). The panel closes on selecting a link, pressing Escape, or
+clicking outside it; focus returns to the toggle button on close; the
+icon morphs between hamburger and × off the button's own
+`aria-expanded` state; and the open/close transition is skipped under
+`prefers-reduced-motion: reduce`. All of this lives in one shared
+`nav.js` (vanilla JS, no dependencies), loaded identically by every page
+so the behavior can't drift between them — same pattern as the header
+markup itself, which is copy-pasted identically rather than templated,
+since there's no build step to share it otherwise. The footer is a
+separate shared block, four columns (Brand, Product, Resources, Legal)
+plus a small-print line with the current year (set by a couple of inline
+lines of vanilla JS on each page — no build step, and it degrades to
+whatever static year is already in the markup if that JS doesn't run)
+and the Robinhood-affiliation disclaimer. Both the header and footer
+reuse the same `style.css` tokens as the redesign — no new colors,
+fonts, or spacing scale introduced for these pages.
 
 ## Project structure
 
@@ -449,6 +462,7 @@ how-it-works.html    # content page — see "Pages" below
 faq.html             # content page — see "Pages" below
 disclaimer.html      # content page — see "Pages" below
 style.css            # styling for every page above (mobile-first, light theme)
+nav.js                # shared header hamburger-nav toggle, loaded by every page
 app.js               # app logic for index.html only (ES module, imports viem utils + scoring.js)
 scoring.js           # Risk Score v1 — pure, rule-based scoring + ABI helpers
 tests/scoring.test.js  # unit tests for scoring.js (node --test)
