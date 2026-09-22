@@ -857,6 +857,7 @@ const scanTechDetailsContentEl = document.getElementById("scan-tech-details-cont
 const riskLevelValueEl = document.getElementById("risk-level-value");
 const riskSummarySentenceEl = document.getElementById("risk-summary-sentence");
 const riskFindingsEl = document.getElementById("risk-findings");
+const gaugeNeedleRotorEl = document.getElementById("gauge-needle-rotor");
 
 const resultAddressEl = document.getElementById("result-address");
 const resultIsContractEl = document.getElementById("result-is-contract");
@@ -1008,7 +1009,120 @@ function buildSellSimulationEvidence(simulation) {
   return details;
 }
 
-// Renders the Risk Score v1 summary: an overall-level badge, the fixed
+// A finding's marker: a small dot + a short two-dash line, the same
+// rounded-cap dash-and-dot treatment as the logo's own dashed line.
+// Colored entirely via CSS `currentColor` from the finding's severity
+// class — this element carries no data, so it's built with SVG DOM
+// APIs directly rather than an HTML template string.
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function buildFindingMarker() {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "finding-marker");
+  svg.setAttribute("viewBox", "0 0 34 9");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+
+  const dot = document.createElementNS(SVG_NS, "circle");
+  dot.setAttribute("cx", "3.5");
+  dot.setAttribute("cy", "4.5");
+  dot.setAttribute("r", "3");
+  svg.appendChild(dot);
+
+  const dash1 = document.createElementNS(SVG_NS, "line");
+  dash1.setAttribute("x1", "13");
+  dash1.setAttribute("y1", "4.5");
+  dash1.setAttribute("x2", "19");
+  dash1.setAttribute("y2", "4.5");
+  svg.appendChild(dash1);
+
+  const dash2 = document.createElementNS(SVG_NS, "line");
+  dash2.setAttribute("x1", "25");
+  dash2.setAttribute("y1", "4.5");
+  dash2.setAttribute("x2", "31");
+  dash2.setAttribute("y2", "4.5");
+  svg.appendChild(dash2);
+
+  return svg;
+}
+
+// The needle's target angle for each overall level, in degrees of CSS
+// `rotate()` measured off the gauge's straight-up ("pointing at Medium")
+// orientation: -60 centers it in the Low (green) zone, 0 in Medium
+// (amber), 60 in High (rose). "Insufficient data" has no numeric read,
+// so it isn't in this map — the needle hides instead of implying a
+// position the data doesn't support. GAUGE_NEEDLE_REST_ANGLE is the
+// needle's pre-animation start position (off the left edge of the
+// dial, past Low) that every sweep animates in from.
+const GAUGE_NEEDLE_ANGLE = { Low: -60, Medium: 0, High: 60 };
+const GAUGE_NEEDLE_REST_ANGLE = -95;
+
+// Points the gauge needle at overallLevel, replaying the sweep-in
+// animation on every scan (not just page load). Snaps straight to the
+// final angle under prefers-reduced-motion instead of animating.
+function setGaugeNeedle(overallLevel) {
+  if (!gaugeNeedleRotorEl) return;
+
+  const angle = GAUGE_NEEDLE_ANGLE[overallLevel];
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  if (angle === undefined) {
+    gaugeNeedleRotorEl.style.transition = "none";
+    gaugeNeedleRotorEl.style.transform = `rotate(${GAUGE_NEEDLE_REST_ANGLE}deg)`;
+    gaugeNeedleRotorEl.classList.add("gauge-needle-hidden");
+    return;
+  }
+  gaugeNeedleRotorEl.classList.remove("gauge-needle-hidden");
+
+  if (reduceMotion) {
+    gaugeNeedleRotorEl.style.transition = "none";
+    gaugeNeedleRotorEl.style.transform = `rotate(${angle}deg)`;
+    return;
+  }
+
+  // Reset to the rest position with transitions off, force a style
+  // flush, then re-enable the transition and set the real angle on the
+  // next frame — the standard trick to make a repeated transition
+  // replay instead of no-op (the property is already at its "changed"
+  // value from the previous scan).
+  gaugeNeedleRotorEl.style.transition = "none";
+  gaugeNeedleRotorEl.style.transform = `rotate(${GAUGE_NEEDLE_REST_ANGLE}deg)`;
+  void gaugeNeedleRotorEl.getBoundingClientRect();
+  gaugeNeedleRotorEl.style.transition = "";
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      gaugeNeedleRotorEl.style.transform = `rotate(${angle}deg)`;
+    });
+  });
+}
+
+// Renders the result card's title: the token name as plain text, plus
+// the symbol as a small "locked target" tag (mono, accent blue,
+// CSS-bracketed — see .token-symbol-tag) rather than plain "(SYMBOL)"
+// text. Built with createElement/textContent, never innerHTML or string
+// concatenation, since name/symbol are untrusted Blockscout data.
+function renderScanResultTitle(name, symbol) {
+  scanResultTitleEl.textContent = "";
+
+  if (!name && !symbol) {
+    scanResultTitleEl.textContent = "Token";
+    return;
+  }
+
+  if (name) {
+    scanResultTitleEl.append(name);
+  }
+
+  if (symbol) {
+    if (name) scanResultTitleEl.append(" ");
+    const symbolTag = document.createElement("span");
+    symbolTag.className = "token-symbol-tag";
+    symbolTag.textContent = symbol;
+    scanResultTitleEl.appendChild(symbolTag);
+  }
+}
+
+// Renders the Risk Score v1 summary: the gauge + level caption, the fixed
 // disclaimer, then findings grouped by outcome (High/Medium/Low risk,
 // then Passed, then Info / unknown — see groupKeyFor). Built with
 // createElement/textContent only — nothing here is ever inserted as HTML,
@@ -1019,6 +1133,7 @@ function renderRiskSummary(overallLevel, findings, sellSimulation) {
   riskLevelValueEl.textContent = overallLevel;
   riskLevelValueEl.className = `risk-level-value risk-level-${overallLevel.toLowerCase().replace(/\s+/g, "-")}`;
   riskSummarySentenceEl.textContent = SUMMARY_SENTENCE[overallLevel] ?? "";
+  setGaugeNeedle(overallLevel);
 
   riskFindingsEl.innerHTML = "";
   for (const groupKey of GROUP_ORDER) {
@@ -1035,6 +1150,10 @@ function renderRiskSummary(overallLevel, findings, sellSimulation) {
     for (const f of group) {
       const item = document.createElement("div");
       item.className = `risk-finding risk-finding-${groupKey}`;
+      item.appendChild(buildFindingMarker());
+
+      const body = document.createElement("div");
+      body.className = "finding-body";
 
       const title = document.createElement("p");
       title.className = "risk-finding-title";
@@ -1044,17 +1163,18 @@ function renderRiskSummary(overallLevel, findings, sellSimulation) {
       detail.className = "risk-finding-detail";
       detail.textContent = f.detail;
 
-      item.append(title, detail);
+      body.append(title, detail);
 
       if (f.id === "sell-simulation" && sellSimulation && (sellSimulation.pools?.length || sellSimulation.holderAttempts?.length)) {
-        item.appendChild(buildSellSimulationEvidence(sellSimulation));
+        body.appendChild(buildSellSimulationEvidence(sellSimulation));
       }
 
       if ((f.id === "owner-status" || f.id === "sell-simulation") && f.diagnostics?.length) {
         const techPanel = buildFindingTechnicalDetails(f.diagnostics);
-        if (techPanel) item.appendChild(techPanel);
+        if (techPanel) body.appendChild(techPanel);
       }
 
+      item.appendChild(body);
       section.appendChild(item);
     }
     riskFindingsEl.appendChild(section);
@@ -1239,7 +1359,7 @@ async function scanToken(rawAddress) {
     });
     renderRiskSummary(overallLevel, findings, sellSimulation);
 
-    scanResultTitleEl.textContent = name && symbol ? `${name} (${symbol})` : name || (symbol ? `(${symbol})` : "Token");
+    renderScanResultTitle(name, symbol);
 
     resultAddressEl.textContent = address;
     resultIsContractEl.textContent = isContract === null ? UNAVAILABLE : isContract ? "Yes" : "No";

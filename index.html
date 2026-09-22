@@ -148,9 +148,24 @@
 
         <div id="risk-summary" class="risk-summary">
           <div class="risk-headline">
-            <div class="risk-level-row">
-              <span class="risk-level-label">Risk level</span>
-              <span id="risk-level-value" class="risk-level-value">—</span>
+            <div class="risk-gauge-wrap">
+              <svg class="risk-gauge" viewBox="0 0 240 140" aria-hidden="true" focusable="false">
+                <path class="gauge-guide-ring" d="M 38 120 A 82 82 0 0 1 202 120"></path>
+                <path class="gauge-zone gauge-zone-low" d="M 20 120 A 100 100 0 0 1 70 33.4"></path>
+                <path class="gauge-zone gauge-zone-medium" d="M 70 33.4 A 100 100 0 0 1 170 33.4"></path>
+                <path class="gauge-zone gauge-zone-high" d="M 170 33.4 A 100 100 0 0 1 220 120"></path>
+                <g transform="translate(120,120)">
+                  <g id="gauge-needle-rotor" class="gauge-needle-rotor">
+                    <line class="gauge-needle" x1="0" y1="0" x2="0" y2="-84"></line>
+                    <circle class="gauge-needle-tip" cx="0" cy="-84" r="4"></circle>
+                  </g>
+                  <circle class="gauge-hub" cx="0" cy="0" r="9"></circle>
+                </g>
+              </svg>
+              <div class="risk-gauge-caption">
+                <span class="risk-level-label">Risk level</span>
+                <span id="risk-level-value" class="risk-level-value">—</span>
+              </div>
             </div>
             <p id="risk-summary-sentence" class="risk-summary-sentence"></p>
           </div>

@@ -17,6 +17,19 @@
   --radius-sm: 8px;
   --spacing: 1.25rem;
 
+  /* Faint concentric-ring texture for the hero (header + intro) only —
+     echoes the logo's ring motif at a scale/contrast that reads as
+     paper texture, not decoration. --color-border is already tuned to
+     sit barely-there on ivory, so reusing it directly (no extra opacity
+     layer) keeps this from ever competing with foreground text. */
+  --hero-texture: repeating-radial-gradient(
+    circle at 90% 8%,
+    transparent 0,
+    transparent 25px,
+    var(--color-border) 26px,
+    var(--color-border) 27px
+  );
+
   /* --- Type ------------------------------------------------------- */
   --font-heading: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -94,6 +107,7 @@ summary:focus-visible {
 .site-header {
   padding: 1.5rem var(--spacing) 1.125rem;
   border-bottom: 1px solid var(--color-border);
+  background-image: var(--hero-texture);
 }
 
 .header-inner {
@@ -467,6 +481,7 @@ main {
 
 .intro {
   padding: 0.25rem 0.1rem 0.25rem;
+  background-image: var(--hero-texture);
 }
 
 .intro-headline {
@@ -754,6 +769,28 @@ input[type="text"]::placeholder {
   font-weight: 600;
 }
 
+/* A small "locked target" treatment for the symbol, restrained to a
+   type/color detail — mono, accent blue, bracketed like a target ID —
+   not a new badge shape. */
+.token-symbol-tag {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+  font-weight: 600;
+  color: var(--color-accent-text);
+}
+
+.token-symbol-tag::before {
+  content: "[";
+  color: var(--color-border-strong);
+  margin-right: 0.05em;
+}
+
+.token-symbol-tag::after {
+  content: "]";
+  color: var(--color-border-strong);
+  margin-left: 0.05em;
+}
+
 .result-card-header .secondary-button {
   margin-top: 0;
   padding: 0.45rem 0.85rem;
@@ -769,42 +806,108 @@ input[type="text"]::placeholder {
 
 .risk-headline {
   margin-bottom: 0.85rem;
+  text-align: center;
 }
 
-.risk-level-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.65rem;
-  margin-bottom: 0.5rem;
+/* --- Risk gauge -------------------------------------------------------
+   The one bold element: a semicircular dial echoing the logo's
+   concentric rings — a thin guide ring behind three colored zone arcs
+   (Low/Medium/High), with a needle that pivots on a target-style hub
+   dot. The SVG is purely decorative (aria-hidden): the caption below it
+   is the real, always-present text equivalent of the risk level. */
+
+.risk-gauge-wrap {
+  max-width: 260px;
+  margin: 0 auto;
+}
+
+.risk-gauge {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.gauge-zone {
+  fill: none;
+  stroke-width: 20;
+}
+
+.gauge-zone-low { stroke: var(--tone-green-border); }
+.gauge-zone-medium { stroke: var(--tone-amber-border); }
+.gauge-zone-high { stroke: var(--tone-rose-border); }
+
+.gauge-guide-ring {
+  fill: none;
+  stroke: var(--color-border);
+  stroke-width: 1.5;
+}
+
+.gauge-needle-rotor {
+  transform: rotate(-95deg);
+  transform-origin: 0 0;
+  transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.gauge-needle-rotor.gauge-needle-hidden {
+  opacity: 0;
+}
+
+.gauge-needle {
+  stroke: var(--color-accent);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.gauge-needle-tip {
+  fill: var(--color-accent);
+}
+
+.gauge-hub {
+  fill: var(--color-accent);
+  stroke: var(--color-surface);
+  stroke-width: 3;
+}
+
+.risk-gauge-caption {
+  margin-top: -0.35rem;
+  text-align: center;
 }
 
 .risk-level-label {
-  font-size: 0.8125rem;
+  display: block;
+  font-size: 0.75rem;
   font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--color-slate);
 }
 
 .risk-level-value {
-  display: inline-block;
-  padding: 0.3rem 0.85rem;
-  border-radius: 999px;
+  display: block;
+  margin-top: 0.15rem;
   font-family: var(--font-heading);
   font-weight: 700;
   font-size: 1.375rem;
   line-height: 1.2;
 }
 
-.risk-level-low { background-color: var(--tone-green-bg); color: var(--tone-green-text); }
-.risk-level-medium { background-color: var(--tone-amber-bg); color: var(--tone-amber-text); }
-.risk-level-high { background-color: var(--tone-rose-bg); color: var(--tone-rose-text); }
-.risk-level-insufficient-data { background-color: var(--tone-neutral-bg); color: var(--color-slate); }
+.risk-level-low { color: var(--tone-green-text); }
+.risk-level-medium { color: var(--tone-amber-text); }
+.risk-level-high { color: var(--tone-rose-text); }
+.risk-level-insufficient-data { color: var(--color-slate); }
 
 .risk-summary-sentence {
-  margin: 0;
+  margin: 0.6rem auto 0;
   font-size: 1rem;
   font-weight: 500;
-  max-width: 44ch;
+  max-width: 34ch;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gauge-needle-rotor {
+    transition: none;
+  }
 }
 
 .risk-disclaimer {
@@ -825,11 +928,54 @@ input[type="text"]::placeholder {
   margin-top: 0;
 }
 
+/* --- Findings as a signal list ------------------------------------------
+   Each finding reads as a radar blip: a small dot + a short rounded-dash
+   line (the exact two-dash treatment from the logo's own dashed line),
+   colored by severity, then the text block — replacing the old colored-
+   card-with-left-border treatment. A hairline divider between rows
+   (not a filled card) keeps the list calm; the severity color lives only
+   on the marker, never washed across the text. */
+
 .risk-finding {
-  border-left: 3px solid transparent;
-  border-radius: var(--radius-sm);
-  padding: 0.6rem 0.75rem;
-  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.risk-findings-group .risk-finding:last-child {
+  border-bottom: none;
+}
+
+.finding-marker {
+  flex-shrink: 0;
+  width: 34px;
+  height: 9px;
+  margin-top: 0.42rem;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  color: var(--color-border-strong);
+}
+
+.risk-finding-passed .finding-marker { color: var(--tone-neutral-border); }
+.risk-finding-low .finding-marker { color: var(--tone-green-border); }
+.risk-finding-medium .finding-marker { color: var(--tone-amber-border); }
+.risk-finding-high .finding-marker { color: var(--tone-rose-border); }
+.risk-finding-unknown .finding-marker { color: var(--tone-unknown-border); }
+
+/* An "unknown" outcome gets a hollow dot rather than a filled one —
+   the same distinction the old dashed-vs-solid left border used to
+   draw, carried over into the new marker instead. */
+.risk-finding-unknown .finding-marker circle {
+  fill: none;
+}
+
+.finding-body {
+  min-width: 0;
+  flex: 1;
 }
 
 .risk-finding-title {
@@ -842,32 +988,6 @@ input[type="text"]::placeholder {
   margin: 0.25rem 0 0;
   font-size: 0.825rem;
   color: var(--color-slate);
-}
-
-.risk-finding-passed {
-  background-color: var(--tone-neutral-bg);
-  border-left-color: var(--tone-neutral-border);
-}
-
-.risk-finding-low {
-  background-color: var(--tone-green-bg);
-  border-left-color: var(--tone-green-border);
-}
-
-.risk-finding-medium {
-  background-color: var(--tone-amber-bg);
-  border-left-color: var(--tone-amber-border);
-}
-
-.risk-finding-high {
-  background-color: var(--tone-rose-bg);
-  border-left-color: var(--tone-rose-border);
-}
-
-.risk-finding-unknown {
-  background-color: var(--tone-unknown-bg);
-  border-left-color: var(--tone-unknown-border);
-  border-left-style: dashed;
 }
 
 .risk-finding-evidence {
@@ -1041,5 +1161,9 @@ input[type="text"]::placeholder {
 
   .risk-level-value {
     font-size: 1.625rem;
+  }
+
+  .risk-gauge-wrap {
+    max-width: 300px;
   }
 }
