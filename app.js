@@ -44,17 +44,46 @@ const WORKER_SOURCE = "Worker";
 // — calls to it must be chunked to this size or smaller.
 const WORKER_MAX_BATCH_SIZE = 10;
 
-// The shared upstream RPC the Worker proxies to can rate-limit under load;
-// the Worker itself retries a rate-limited upstream call a few times (see
-// worker/index.js), but a multi-batch check here (owner lookup, and
-// especially the sell-simulation honeypot check's several sequential
-// batches) can still trip it across separate batches. CHUNK_DELAY_MS is a
-// small pause between sequential batches (never before the first one) to
-// spread the load out; if a batch still comes back rate-limited, it's
-// retried once after RATE_LIMIT_RETRY_DELAY_MS before giving up — see
-// callWorkerChunked below.
-const CHUNK_DELAY_MS = 250;
+// The shared upstream RPC the Worker proxies to has a tight rate limit
+// that a full scan's *burst* of sequential eth_call requests (owner, then
+// pool detection per top holder, then baseline/sell-like transfers per
+// pool) can still trip even with the Worker's own per-request retries
+// (worker/index.js's callUpstream, up to 5 attempts with backoff). Three
+// layers of resilience here, from smallest to largest scope:
+//   - CHUNK_DELAY_MS: a pause between sequential batches *within* one
+//     multi-batch call (never before the first one) — see
+//     callWorkerChunked below.
+//   - RATE_LIMIT_RETRY_DELAY_MS: if a single batch still comes back
+//     rate-limited after the Worker's own retries, that one batch is
+//     retried once here before giving up — see callWorkerChunked below.
+//   - WHOLE_CHECK_RATE_LIMIT_RETRY_DELAY_MS: if an entire check (the
+//     owner lookup, or the sell-simulation honeypot check as a whole —
+//     not any single attempt within it) still ends up rate-limited after
+//     all of the above, the whole check is retried once more — see
+//     withWholeCheckRateLimitRetry below.
+const CHUNK_DELAY_MS = 500;
 const RATE_LIMIT_RETRY_DELAY_MS = 600;
+const WHOLE_CHECK_RATE_LIMIT_RETRY_DELAY_MS = 1500;
+
+// True if `diagnostics` (as returned by callWorkerChunked) shows the
+// failure was specifically rate limiting — as opposed to, say, the
+// Worker being fully unreachable — which is the one case worth retrying
+// an entire check for rather than just showing Unknown immediately.
+function hasRateLimitedDiagnostic(diagnostics) {
+  return Array.isArray(diagnostics) && diagnostics.some((d) => d?.kind === "upstream-rate-limited");
+}
+
+// Runs `runCheck` once; if the result looks rate-limited per `isRateLimited`,
+// waits WHOLE_CHECK_RATE_LIMIT_RETRY_DELAY_MS and runs it exactly once
+// more, returning whichever attempt's result (the retry's, win or lose —
+// never more than one extra attempt, and the honest "Unknown" outcome and
+// its real diagnostics are preserved either way, never hidden).
+async function withWholeCheckRateLimitRetry(runCheck, isRateLimited) {
+  const first = await runCheck();
+  if (!isRateLimited(first)) return first;
+  await sleep(WHOLE_CHECK_RATE_LIMIT_RETRY_DELAY_MS);
+  return runCheck();
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -373,16 +402,20 @@ async function fetchOwnerViaWorker(tokenAddress) {
 // --- Sell-simulation honeypot check ---------------------------------------
 //
 // DEX-agnostic and read-only: never assumes a specific DEX, never invents
-// factory/router addresses. Detects liquidity pools among the top 10
-// holders purely by asking each contract holder for token0()/token1() and
-// checking whether one of those matches the scanned token — any contract
-// that answers that way is treated as a pool, whichever DEX it belongs
-// to. Then simulates, via eth_call (never a real transaction), a transfer
-// from up to 3 plain-wallet top holders to (a) a fixed probe address and
-// (b) each detected pool, to see whether "selling" looks blocked.
+// factory/router addresses. Detects liquidity pools among the top 5
+// holders (capped down from 10 — see the module doc comment on
+// CHUNK_DELAY_MS above for why: this whole check's burst of sequential
+// eth_call requests is what trips the shared RPC's rate limit) purely by
+// asking each contract holder for token0()/token1() and checking whether
+// one of those matches the scanned token — any contract that answers
+// that way is treated as a pool, whichever DEX it belongs to. Then
+// simulates, via eth_call (never a real transaction), a transfer from up
+// to 2 plain-wallet top holders (capped down from 3, same reason) to (a)
+// a fixed probe address and (b) each detected pool, to see whether
+// "selling" looks blocked.
 async function runSellSimulation(tokenAddress, holders) {
-  const top10 = Array.isArray(holders) ? holders.slice(0, 10) : [];
-  const contractHolders = top10.filter((h) => h.isContract === true);
+  const top5 = Array.isArray(holders) ? holders.slice(0, 5) : [];
+  const contractHolders = top5.filter((h) => h.isContract === true);
 
   if (contractHolders.length === 0) {
     return { status: "no-pool", pools: [], holderAttempts: [] };
@@ -424,7 +457,7 @@ async function runSellSimulation(tokenAddress, holders) {
         return false;
       }
     })
-    .slice(0, 3);
+    .slice(0, 2);
 
   if (candidateHolders.length === 0) {
     return { status: "no-holder", pools, holderAttempts: [] };
@@ -449,6 +482,12 @@ async function runSellSimulation(tokenAddress, holders) {
       callTags.push({ holder: holder.address, kind: "sell", pool: pool.address });
     }
   }
+
+  // A gap before the transfer-simulation batches too — pool detection
+  // (above) and this are two separate callWorkerChunked calls run back
+  // to back, so without this the delay CHUNK_DELAY_MS adds *within* each
+  // one wouldn't do anything to space out the seam between them.
+  await sleep(CHUNK_DELAY_MS);
 
   const simOutcome = await callWorkerChunked(simulationCalls, `${WORKER_SOURCE} — eth_call transfer() simulation`);
   if (!simOutcome.ok) {
@@ -1029,14 +1068,15 @@ async function scanToken(rawAddress) {
   scanButton.textContent = "Scanning…";
 
   try {
-    const [addressResult, tokenResult, contractResult, holdersResult, ownerOutcome] = await Promise.all([
+    // fetchOwnerViaWorker is deliberately NOT in this Promise.all — see
+    // the owner()/sell-simulation sequencing note below, right before
+    // it's actually called.
+    const [addressResult, tokenResult, contractResult, holdersResult] = await Promise.all([
       fetchBlockscout(`/addresses/${address}`, `${BLOCKSCOUT_SOURCE} — GET /addresses/{address}`),
       fetchBlockscout(`/tokens/${address}`, `${BLOCKSCOUT_SOURCE} — GET /tokens/{address}`),
       fetchBlockscout(`/smart-contracts/${address}`, `${BLOCKSCOUT_SOURCE} — GET /smart-contracts/{address}`),
       fetchBlockscout(`/tokens/${address}/holders`, `${BLOCKSCOUT_SOURCE} — GET /tokens/{address}/holders`),
-      fetchOwnerViaWorker(address),
     ]);
-    const { owner, diagnostics: ownerDiagnostics } = ownerOutcome;
 
     // The creation transaction's timestamp (for token age) needs the
     // creation tx hash from /addresses first, so it's a follow-up call.
@@ -1142,10 +1182,30 @@ async function scanToken(rawAddress) {
     const volume24hUsd = tokenBody?.volume_24h ?? null;
     const marketCapUsd = tokenBody?.circulating_market_cap ?? null;
 
-    // Sell-simulation honeypot check — its own eth_call round trips
-    // through the Worker (pool detection, then the transfer simulations),
-    // run after the holders data it depends on is available.
-    const sellSimulation = await runSellSimulation(address, holders);
+    // The owner() read and the sell-simulation honeypot check (pool
+    // detection, then transfer simulations) are the only two things that
+    // hit the Worker's eth_call route during a scan. They're run here,
+    // sequentially with a gap between them (never in parallel with each
+    // other), specifically to avoid bursting the shared upstream RPC's
+    // tight rate limit — see the CHUNK_DELAY_MS doc comment near the top
+    // of this file. Each is also individually retried once as a whole
+    // (not just per-batch — see withWholeCheckRateLimitRetry) if it comes
+    // back rate-limited even after the Worker's and callWorkerChunked's
+    // own retries. If it's still rate-limited after that, the honest
+    // "Unknown" outcome (with its real diagnostics) is what gets shown —
+    // never hidden or silently swallowed.
+    const ownerOutcome = await withWholeCheckRateLimitRetry(
+      () => fetchOwnerViaWorker(address),
+      (r) => r.owner === null && hasRateLimitedDiagnostic(r.diagnostics),
+    );
+    const { owner, diagnostics: ownerDiagnostics } = ownerOutcome;
+
+    await sleep(CHUNK_DELAY_MS);
+
+    const sellSimulation = await withWholeCheckRateLimitRetry(
+      () => runSellSimulation(address, holders),
+      (r) => r.status === "unreachable" && hasRateLimitedDiagnostic(r.diagnostics),
+    );
 
     const { overallLevel, findings } = scoreToken({
       isVerified,

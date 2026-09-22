@@ -16,6 +16,10 @@ import worker, {
   validateParams,
   validateRequest,
   parseBatch,
+  decideUpstreamRetry,
+  MAX_UPSTREAM_ATTEMPTS,
+  RETRY_DELAYS_MS,
+  UPSTREAM_TIMEOUT_MS,
 } from "../index.js";
 
 const SITE_ORIGIN = "https://agrarisai.github.io";
@@ -373,11 +377,54 @@ test("full request handler: a real POST from a disallowed origin is rejected wit
 // --- Upstream rate-limit retry ---------------------------------------------
 //
 // The shared upstream RPC rate-limits (429) or is briefly overloaded (503)
-// under load. callUpstream (internal, not exported — network code isn't
-// unit-tested directly elsewhere in this file either) retries with backoff
-// before giving up; these tests drive it the same way as the CORS/POST
-// tests above, through the real `fetch(request)` entry point, so what's
-// verified is the Worker's actual end-to-end behavior.
+// under load. The retry/backoff *decision* (decideUpstreamRetry) is pure
+// and tested directly below, with no real waiting — including the
+// time-budget-capping case, which would otherwise need an 8s-long test.
+// callUpstream itself (the network orchestration around that decision)
+// is exercised end-to-end afterwards, through the real `fetch(request)`
+// entry point, the same way as the CORS/POST tests above — but only for
+// the fast cases, since a full 5-attempt exhaustion takes the real
+// ~6s of backoff.
+
+test("decideUpstreamRetry: retries a 429/503 with the documented backoff, while attempts and time budget allow", () => {
+  assert.deepEqual(decideUpstreamRetry(429, 1, 0), { retry: true, delayMs: RETRY_DELAYS_MS[0] });
+  assert.deepEqual(decideUpstreamRetry(503, 1, 0), { retry: true, delayMs: RETRY_DELAYS_MS[0] });
+  assert.deepEqual(decideUpstreamRetry(429, 2, 500), { retry: true, delayMs: RETRY_DELAYS_MS[1] });
+  assert.deepEqual(decideUpstreamRetry(429, 3, 2000), { retry: true, delayMs: RETRY_DELAYS_MS[2] });
+  assert.deepEqual(decideUpstreamRetry(429, 4, 1000), { retry: true, delayMs: RETRY_DELAYS_MS[3] });
+});
+
+test("decideUpstreamRetry: never retries a non-retryable status, however early", () => {
+  for (const status of [200, 400, 403, 500, 504]) {
+    assert.deepEqual(decideUpstreamRetry(status, 1, 0), { retry: false, reason: "not-retryable" });
+  }
+});
+
+test("decideUpstreamRetry: stops once MAX_UPSTREAM_ATTEMPTS is reached, even with time to spare", () => {
+  assert.equal(MAX_UPSTREAM_ATTEMPTS, 5);
+  assert.deepEqual(decideUpstreamRetry(429, MAX_UPSTREAM_ATTEMPTS, 0), { retry: false, reason: "exhausted-attempts" });
+});
+
+test("decideUpstreamRetry: stops early (before exhausting attempts) when the next delay would blow the 8s budget", () => {
+  // At attempt 4 (about to try the 3200ms delay before attempt 5), having
+  // already used most of the 8s budget, there isn't room for another
+  // 3200ms wait — this is the "cap attempts to respect the timeout" case.
+  const elapsedMs = UPSTREAM_TIMEOUT_MS - RETRY_DELAYS_MS[3] + 1; // 1ms short of enough room
+  const decision = decideUpstreamRetry(429, 4, elapsedMs);
+  assert.deepEqual(decision, { retry: false, reason: "time-budget" });
+});
+
+test("decideUpstreamRetry: does retry when there's exactly enough time left", () => {
+  const elapsedMs = UPSTREAM_TIMEOUT_MS - RETRY_DELAYS_MS[3] - 1; // 1ms of room to spare
+  const decision = decideUpstreamRetry(429, 4, elapsedMs);
+  assert.deepEqual(decision, { retry: true, delayMs: RETRY_DELAYS_MS[3] });
+});
+
+test("RETRY_DELAYS_MS matches the documented backoff schedule (400ms, 800ms, 1600ms, 3200ms)", () => {
+  assert.deepEqual(RETRY_DELAYS_MS, [400, 800, 1600, 3200]);
+  // One delay per gap between MAX_UPSTREAM_ATTEMPTS attempts.
+  assert.equal(RETRY_DELAYS_MS.length, MAX_UPSTREAM_ATTEMPTS - 1);
+});
 
 test("upstream 429 then success: the Worker retries and eventually returns 200", async (t) => {
   const originalFetch = globalThis.fetch;
@@ -409,7 +456,11 @@ test("upstream 429 then success: the Worker retries and eventually returns 200",
   assert.equal(body.result, "0x1237");
 });
 
-test("upstream 429 on every attempt: the Worker gives up after 3 tries and returns a clearly-labeled 502", async (t) => {
+// Real backoff, real timers — the full 5-attempt exhaustion takes
+// ~6s (400+800+1600+3200ms) for real, which is the point: it confirms
+// the actual end-to-end timing, not just the decision logic (already
+// covered fast, above).
+test("upstream 429 on every attempt: the Worker gives up after 5 tries and returns a clearly-labeled 502", async (t) => {
   const originalFetch = globalThis.fetch;
   let callCount = 0;
   globalThis.fetch = async () => {
@@ -427,11 +478,12 @@ test("upstream 429 on every attempt: the Worker gives up after 3 tries and retur
   });
   const response = await worker.fetch(request);
 
-  assert.equal(callCount, 3, "should try 3 times total before giving up");
+  assert.equal(callCount, MAX_UPSTREAM_ATTEMPTS, `should try ${MAX_UPSTREAM_ATTEMPTS} times total before giving up`);
   assert.equal(response.status, 502);
   const body = await response.json();
   assert.equal(body.kind, "upstream-rate-limited");
   assert.match(body.detail, /rate limited/i);
+  assert.match(body.detail, new RegExp(`after ${MAX_UPSTREAM_ATTEMPTS} attempts`));
 });
 
 test("upstream 503 is retried the same way as 429", async (t) => {

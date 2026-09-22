@@ -168,13 +168,16 @@ or factory, and it never invents an address.
 It runs three steps, entirely through the [Worker](#worker) RPC proxy:
 
 1. **Pick holders to test.** From the top holders Blockscout already
-   returned, pick up to 3 that are *not* contracts, have a balance above
-   zero, and aren't zero/burn addresses.
-2. **Detect liquidity pools.** Among the top 10 holders that *are*
-   contracts, call `token0()` (`0x0dfe1681`) and `token1()`
-   (`0xd21220a7`) on each one. A holder that returns two valid addresses,
-   one of which is the scanned token itself, is treated as a pool — no
-   assumption is made about which DEX it belongs to.
+   returned, pick up to 2 that are *not* contracts, have a balance above
+   zero, and aren't zero/burn addresses. (Capped down from an earlier
+   3 — see [Rate limiting](#rate-limiting) below for why: fewer holders
+   means fewer sequential `eth_call`s per scan.)
+2. **Detect liquidity pools.** Among the top 5 holders (capped down from
+   an earlier 10, same reason) that *are* contracts, call `token0()`
+   (`0x0dfe1681`) and `token1()` (`0xd21220a7`) on each one. A holder that
+   returns two valid addresses, one of which is the scanned token itself,
+   is treated as a pool — no assumption is made about which DEX it
+   belongs to.
 3. **Simulate a transfer with `eth_call`** (never a real transaction) for
    each selected holder: `from` the holder, `to` the token, `data` a
    `transfer(recipient, amount)` call encoded by hand (amount = 1% of
@@ -532,9 +535,10 @@ above for why that endpoint can fail from some networks). It:
 - only accepts requests from `https://agrarisai.github.io` (no wildcard
   CORS);
 - **retries a rate-limited or overloaded upstream call** (HTTP `429`/`503`
-  from `rpc.mainnet.chain.robinhood.com` — the RPC is shared, so this
-  happens under load) up to 3 times total, with exponential backoff
-  starting around 300ms, all within the existing 8s overall timeout — see
+  from `rpc.mainnet.chain.robinhood.com` — the RPC has a tight shared
+  rate limit, and a full scan's burst of sequential calls can trip it) up
+  to 5 times total, with backoff `400ms, 800ms, 1600ms, 3200ms`, capped
+  to whatever fits within the existing 8s overall timeout — see
   [Rate limiting](#rate-limiting) below;
 - times out upstream calls after 8s and reports `502` with a real reason
   if the upstream still fails after retries, rather than hanging;
@@ -661,47 +665,86 @@ instead of leaving it as an unexplained "could not be reached".
 
 ### Rate limiting
 
-`rpc.mainnet.chain.robinhood.com` is a shared, third-party endpoint and
-can rate-limit (`429`) or briefly overload (`503`) under load — the
-Worker proxies to it, so a Worker call can fail for this reason even
-though nothing about CORS, origin, or validation is wrong. Two layers of
-resilience handle this, both within the project's existing constraints
-(no new dependencies, no secrets/state):
+`rpc.mainnet.chain.robinhood.com` is a shared, third-party endpoint with a
+**tight** rate limit — tight enough that it can reject calls that are
+individually perfectly fine. An **isolated** `eth_call` (e.g. the "Test
+Worker connection" self-test's single request) rarely trips it. A **full
+token scan** is a different story: it makes a *burst* of sequential
+`eth_call` requests in quick succession — `owner()`, then `token0()`/
+`token1()` for every contract holder considered for pool detection, then
+a baseline and a sell-like `transfer()` simulation for every combination
+of eligible holder × detected pool — and that burst is exactly what can
+trip the limit even when each individual call would have been fine on its
+own. Three layers of resilience handle this, from smallest to largest
+scope, all within the project's existing constraints (no new
+dependencies, no secrets/state, and no more retrying than described here
+— the point is to ride out a brief limit, not to hammer the upstream
+harder):
 
 - **In the Worker** (`callUpstream` in `worker/index.js`): a `429`/`503`
-  from the upstream is retried up to 3 times total, with exponential
-  backoff starting around 300ms (300ms, then 600ms between attempts) —
-  all within the existing 8s overall `UPSTREAM_TIMEOUT_MS` budget, so a
-  request never hangs longer than it already could. If every attempt is
-  still rate-limited, the Worker returns `502` with a body that clearly
-  says so: `{"error": "Upstream RPC request failed", "detail": "Upstream
-  is rate limited (HTTP 429) after 3 attempts", "kind":
-  "upstream-rate-limited"}` — that `kind` field is what lets `app.js` (and
-  the Technical details panels) show a specific "the RPC is busy, please
-  try again" message instead of a generic connectivity error. Any other
-  upstream HTTP error is *not* retried and fails immediately, exactly as
-  before.
-- **In `app.js`**, for the owner check and the sell-simulation honeypot
-  check specifically — the two checks that can make several *sequential*
-  Worker batches for one scan (`callWorkerChunked`): a small delay
-  (`CHUNK_DELAY_MS`, 250ms) is inserted *between* sequential batches
-  (never before the first one) to spread the load out and make hitting
-  the rate limit less likely in the first place, and if a batch still
-  comes back with `kind: "upstream-rate-limited"` after the Worker's own
-  retries, that one batch is retried once more (after
-  `RATE_LIMIT_RETRY_DELAY_MS`, 600ms) before the check gives up and shows
-  Unknown. This is what keeps a normal scan from failing outright over
-  what's usually a brief, transient rate limit — the network status
-  probe (a single, simple batch) doesn't need this since it isn't making
-  sequential batches.
+  from the upstream is retried up to **5 times total**, with backoff
+  `400ms, 800ms, 1600ms, 3200ms` between attempts — all within the
+  existing 8s overall `UPSTREAM_TIMEOUT_MS` budget. Since that backoff
+  alone sums to 6s, `callUpstream` also tracks how much of the 8s budget
+  is left before starting each delay (the pure `decideUpstreamRetry`
+  function, unit-tested directly with no real waiting) and stops early —
+  capping attempts to whatever actually fits — rather than starting a
+  delay it can't finish. Either way, if it's still rate-limited when it
+  gives up, the Worker returns `502` with a body that clearly says so and
+  says which case it was:
+  `{"error": "Upstream RPC request failed", "detail": "Upstream is rate
+  limited (HTTP 429) after 5 attempts", "kind": "upstream-rate-limited"}`
+  (or, if capped by the timeout budget instead of running out of
+  attempts, `"...stopped after 4 of 5 attempts to stay within the 8s
+  timeout"`). That `kind` field is what lets `app.js` (and the Technical
+  details panels) show a specific "the RPC is busy, please try again"
+  message instead of a generic connectivity error. Any other upstream
+  HTTP error is *not* retried and fails immediately, unchanged.
+- **In `app.js`, reducing the burst itself**: the sell-simulation
+  honeypot check now scans only the **top 5** holders for pool detection
+  (down from 10) and simulates from at most **2** eligible holders (down
+  from 3) — still enough to be useful, but a noticeably smaller burst of
+  calls per scan. The owner() check and the sell-simulation check (pool
+  detection, then the transfer simulations) are also run strictly
+  **sequentially with a gap** between each of these three stages
+  (`CHUNK_DELAY_MS`, 500ms) rather than any of them overlapping — this
+  same delay also separates sequential batches *within* one multi-batch
+  call via `callWorkerChunked`, for the same reason. The network status
+  probe (a single, simple batch, and not part of a scan's burst) doesn't
+  need any of this.
+- **In `app.js`, two further retry layers on top of the Worker's own**:
+  if a single batch still comes back `kind: "upstream-rate-limited"`
+  after the Worker's own retries, `callWorkerChunked` retries that one
+  batch once more (after `RATE_LIMIT_RETRY_DELAY_MS`, 600ms). And if an
+  **entire check** — the owner lookup, or the sell-simulation check as a
+  whole, not any single batch within it — still ends up rate-limited
+  after all of the above, `withWholeCheckRateLimitRetry` retries the
+  whole check exactly **once more** (after
+  `WHOLE_CHECK_RATE_LIMIT_RETRY_DELAY_MS`, 1.5s) before giving up. If it's
+  *still* rate-limited after that, the check honestly shows **Unknown**
+  with its real diagnostics — this is never hidden or retried
+  indefinitely; a sustained, severe rate limit is a real "couldn't check
+  this" outcome, not something to paper over.
 
-`worker/tests/worker.test.js` covers this against the real
-`fetch(request)` handler: a `429` followed by a success (confirms the
-retry happens and the Worker still returns `200`), a `429` on every
-attempt (confirms it gives up after exactly 3 tries and returns the
-`upstream-rate-limited`-labeled `502`), a `503` retried the same way as
-`429`, and a non-retryable error like `500` failing immediately with no
-retry — runnable with `node --test worker/tests/worker.test.js`.
+`worker/tests/worker.test.js` covers the Worker's side two ways: fast,
+direct unit tests of `decideUpstreamRetry` (the retry/timing decision,
+including the time-budget-capping case, which would otherwise need an
+8s-long test) with no real waiting, plus a few end-to-end tests against
+the real `fetch(request)` handler with a mocked upstream — a `429`
+followed by a success, a `429` on every attempt (confirms it gives up
+after exactly 5 tries and returns the `upstream-rate-limited`-labeled
+`502`), a `503` retried the same way as `429`, and a non-retryable error
+like `500` failing immediately with no retry — runnable with
+`node --test worker/tests/worker.test.js`. The `app.js` side (the
+sequencing, the batch-size caps, and the whole-check retry) was verified
+with a mocked-`fetch()` Playwright harness simulating a scan where every
+`eth_call` batch is rate-limited: the owner check and sell-simulation's
+pool-detection stage both recovered via the whole-check retry, with the
+observed delays between calls matching `CHUNK_DELAY_MS`,
+`RATE_LIMIT_RETRY_DELAY_MS`, and `WHOLE_CHECK_RATE_LIMIT_RETRY_DELAY_MS`
+exactly; a second scenario with the rate limit never lifting confirmed
+both checks end in an honest Unknown (with real diagnostics) rather than
+hanging or retrying forever.
 
 ## Security notes
 
