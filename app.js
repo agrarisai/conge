@@ -44,6 +44,22 @@ const WORKER_SOURCE = "Worker";
 // — calls to it must be chunked to this size or smaller.
 const WORKER_MAX_BATCH_SIZE = 10;
 
+// The shared upstream RPC the Worker proxies to can rate-limit under load;
+// the Worker itself retries a rate-limited upstream call a few times (see
+// worker/index.js), but a multi-batch check here (owner lookup, and
+// especially the sell-simulation honeypot check's several sequential
+// batches) can still trip it across separate batches. CHUNK_DELAY_MS is a
+// small pause between sequential batches (never before the first one) to
+// spread the load out; if a batch still comes back rate-limited, it's
+// retried once after RATE_LIMIT_RETRY_DELAY_MS before giving up — see
+// callWorkerChunked below.
+const CHUNK_DELAY_MS = 250;
+const RATE_LIMIT_RETRY_DELAY_MS = 600;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // An arbitrary, unfunded placeholder address with no special meaning to
 // any token or protocol — used only as the baseline transfer-simulation
 // recipient in the sell-simulation honeypot check below. eth_call never
@@ -138,16 +154,19 @@ async function fetchBlockscout(path, label) {
 // Worker itself (see worker/index.js): 403 means the request's Origin
 // isn't on its allow-list, 400/413 means it rejected the request as
 // malformed or oversized before even reaching the upstream, and 502 means
-// it reached out to its upstream RPC and that failed. Naming these
-// distinctly (rather than a generic "http" kind) is what lets the UI and
-// the "Test Worker connection" self-test tell a CORS/preflight failure
-// (which never reaches this function — see the "network-or-cors" kind in
-// fetchRaw above) apart from a same-origin request the Worker validated
-// and rejected on its own terms.
-function classifyWorkerHttpKind(status) {
+// it reached out to its upstream RPC and that failed — either because the
+// upstream was unreachable/erroring, or (body.kind === "upstream-rate-
+// -limited") because the upstream rate-limited every retry the Worker
+// already attempted on its own. Naming these distinctly (rather than a
+// generic "http" kind) is what lets the UI and the "Test Worker
+// connection" self-test tell a CORS/preflight failure (which never
+// reaches this function — see the "network-or-cors" kind in fetchRaw
+// above) apart from a same-origin request the Worker validated and
+// rejected on its own terms.
+function classifyWorkerHttpKind(status, body) {
   if (status === 403) return "origin-rejected";
   if (status === 400 || status === 413) return "validation-rejected";
-  if (status === 502) return "upstream-unreachable";
+  if (status === 502) return body?.kind === "upstream-rate-limited" ? "upstream-rate-limited" : "upstream-unreachable";
   return "http";
 }
 
@@ -177,10 +196,9 @@ async function probeWorker() {
   if (!response.ok) {
     const bodyError = body && (Array.isArray(body) ? body.find((entry) => entry.error)?.error : body.error);
     diagnostic.errorName = "HTTPError";
-    diagnostic.errorMessage = bodyError
-      ? bodyError.message
-      : response.statusText || rawText.slice(0, 200) || `HTTP ${response.status}`;
-    diagnostic.kind = classifyWorkerHttpKind(response.status);
+    diagnostic.errorMessage =
+      bodyError?.message || body?.detail || (typeof bodyError === "string" ? bodyError : null) || response.statusText || rawText.slice(0, 200) || `HTTP ${response.status}`;
+    diagnostic.kind = classifyWorkerHttpKind(response.status, body);
     return { ok: false, diagnostic };
   }
 
@@ -260,8 +278,9 @@ async function callWorkerBatch(calls, label) {
   if (!response.ok) {
     const bodyError = body && (Array.isArray(body) ? body.find((entry) => entry?.error)?.error : body.error);
     diagnostic.errorName = "HTTPError";
-    diagnostic.errorMessage = bodyError?.message || body?.error || response.statusText || `HTTP ${response.status}`;
-    diagnostic.kind = classifyWorkerHttpKind(response.status);
+    diagnostic.errorMessage =
+      bodyError?.message || body?.detail || (typeof bodyError === "string" ? bodyError : null) || response.statusText || `HTTP ${response.status}`;
+    diagnostic.kind = classifyWorkerHttpKind(response.status, body);
     return { ok: false, diagnostic };
   }
 
@@ -301,16 +320,32 @@ async function callWorkerBatch(calls, label) {
 }
 
 // Splits `calls` into chunks of at most WORKER_MAX_BATCH_SIZE and sends
-// each as its own batch. If the Worker is unreachable for ANY chunk, the
-// whole thing is treated as unreachable — a partial read here would be
-// more confusing than useful for the honeypot check's "Worker or RPC
-// unreachable" outcome.
+// each as its own batch, sequentially. If the Worker is unreachable for
+// ANY chunk, the whole thing is treated as unreachable — a partial read
+// here would be more confusing than useful for the honeypot check's
+// "Worker or RPC unreachable" outcome.
+//
+// Two small resilience additions on top of the Worker's own upstream
+// retries (see worker/index.js): a short CHUNK_DELAY_MS pause *between*
+// sequential batches (never before the first one) so a multi-batch check
+// doesn't hammer the shared upstream RPC back-to-back, and — if a batch
+// still comes back rate-limited after the Worker's own retries — one
+// extra retry of that same batch here before giving up. This is what
+// keeps a normal scan (owner lookup, sell-simulation) from failing
+// outright over what's usually a brief, temporary rate limit.
 async function callWorkerChunked(calls, label) {
   const allResults = [];
   const diagnostics = [];
   for (let i = 0; i < calls.length; i += WORKER_MAX_BATCH_SIZE) {
+    if (i > 0) {
+      await sleep(CHUNK_DELAY_MS);
+    }
     const chunk = calls.slice(i, i + WORKER_MAX_BATCH_SIZE);
-    const outcome = await callWorkerBatch(chunk, label);
+    let outcome = await callWorkerBatch(chunk, label);
+    if (!outcome.ok && outcome.diagnostic.kind === "upstream-rate-limited") {
+      await sleep(RATE_LIMIT_RETRY_DELAY_MS);
+      outcome = await callWorkerBatch(chunk, label);
+    }
     diagnostics.push(outcome.diagnostic);
     if (!outcome.ok) {
       return { ok: false, diagnostics };
@@ -452,6 +487,8 @@ function friendlyMessageFor(diagnostic, sourceLabel) {
       return `${sourceLabel} rejected this request as malformed or too large (HTTP ${diagnostic.httpStatus}): ${diagnostic.errorMessage}. This is a validation rejection, not a CORS/preflight failure — the request did reach the Worker.`;
     case "upstream-unreachable":
       return `${sourceLabel} reached the upstream RPC and that call failed (HTTP 502): ${diagnostic.errorMessage}`;
+    case "upstream-rate-limited":
+      return `The RPC is busy right now — the Worker already retried a few times (HTTP 502). Please try again in a moment.`;
     case "http":
       if (diagnostic.httpStatus === 429) {
         return `${sourceLabel} is rate-limiting requests (HTTP 429). Please wait a moment and retry.`;
@@ -717,8 +754,9 @@ function classifyWorkerTestRaw(raw) {
       ...diagnostic,
       ok: false,
       errorName: "HTTPError",
-      errorMessage: bodyError?.message || body?.error || response.statusText || `HTTP ${response.status}`,
-      kind: classifyWorkerHttpKind(response.status),
+      errorMessage:
+        bodyError?.message || body?.detail || (typeof bodyError === "string" ? bodyError : null) || response.statusText || `HTTP ${response.status}`,
+      kind: classifyWorkerHttpKind(response.status, body),
     };
   }
   const entry = Array.isArray(body) ? body[0] : body;
@@ -747,6 +785,9 @@ function renderWorkerTestResults(raws) {
     } else if (diagnostic.kind === "network-or-cors" || diagnostic.kind === "timeout") {
       p.className = "status-bad";
       p.textContent = `${diagnostic.label}: never reached the Worker — ${diagnostic.kind} (${diagnostic.errorName}: ${diagnostic.errorMessage}). This is the signature of a CORS/preflight failure.`;
+    } else if (diagnostic.kind === "upstream-rate-limited") {
+      p.className = "status-bad";
+      p.textContent = `${diagnostic.label}: reached the Worker, which is being rate-limited by its own upstream RPC (HTTP 502, already retried): ${diagnostic.errorMessage}. Not a CORS/preflight failure — try again in a moment.`;
     } else {
       p.className = "status-bad";
       p.textContent = `${diagnostic.label}: reached the Worker, which rejected it — ${diagnostic.kind} (HTTP ${diagnostic.httpStatus ?? "—"}): ${diagnostic.errorMessage}. This is a validation rejection, not a CORS/preflight failure.`;

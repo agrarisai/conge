@@ -369,3 +369,117 @@ test("full request handler: a real POST from a disallowed origin is rejected wit
   assert.equal(response.headers.get("access-control-allow-origin"), null);
   assert.equal(upstreamWasCalled, false);
 });
+
+// --- Upstream rate-limit retry ---------------------------------------------
+//
+// The shared upstream RPC rate-limits (429) or is briefly overloaded (503)
+// under load. callUpstream (internal, not exported — network code isn't
+// unit-tested directly elsewhere in this file either) retries with backoff
+// before giving up; these tests drive it the same way as the CORS/POST
+// tests above, through the real `fetch(request)` entry point, so what's
+// verified is the Worker's actual end-to-end behavior.
+
+test("upstream 429 then success: the Worker retries and eventually returns 200", async (t) => {
+  const originalFetch = globalThis.fetch;
+  let callCount = 0;
+  globalThis.fetch = async () => {
+    callCount += 1;
+    if (callCount === 1) {
+      return new Response("Too Many Requests", { status: 429 });
+    }
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x1237" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const request = new Request(WORKER_URL, {
+    method: "POST",
+    headers: { Origin: SITE_ORIGIN, "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+  });
+  const response = await worker.fetch(request);
+
+  assert.equal(callCount, 2, "the Worker should have retried once after the 429");
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.result, "0x1237");
+});
+
+test("upstream 429 on every attempt: the Worker gives up after 3 tries and returns a clearly-labeled 502", async (t) => {
+  const originalFetch = globalThis.fetch;
+  let callCount = 0;
+  globalThis.fetch = async () => {
+    callCount += 1;
+    return new Response("Too Many Requests", { status: 429 });
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const request = new Request(WORKER_URL, {
+    method: "POST",
+    headers: { Origin: SITE_ORIGIN, "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+  });
+  const response = await worker.fetch(request);
+
+  assert.equal(callCount, 3, "should try 3 times total before giving up");
+  assert.equal(response.status, 502);
+  const body = await response.json();
+  assert.equal(body.kind, "upstream-rate-limited");
+  assert.match(body.detail, /rate limited/i);
+});
+
+test("upstream 503 is retried the same way as 429", async (t) => {
+  const originalFetch = globalThis.fetch;
+  let callCount = 0;
+  globalThis.fetch = async () => {
+    callCount += 1;
+    if (callCount < 2) return new Response("Service Unavailable", { status: 503 });
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x1237" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const request = new Request(WORKER_URL, {
+    method: "POST",
+    headers: { Origin: SITE_ORIGIN, "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+  });
+  const response = await worker.fetch(request);
+
+  assert.equal(callCount, 2);
+  assert.equal(response.status, 200);
+});
+
+test("a non-retryable upstream error (e.g. 500) fails immediately, with no retry and no rate-limited kind", async (t) => {
+  const originalFetch = globalThis.fetch;
+  let callCount = 0;
+  globalThis.fetch = async () => {
+    callCount += 1;
+    return new Response("Internal Server Error", { status: 500 });
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const request = new Request(WORKER_URL, {
+    method: "POST",
+    headers: { Origin: SITE_ORIGIN, "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+  });
+  const response = await worker.fetch(request);
+
+  assert.equal(callCount, 1, "a non-retryable status should not be retried");
+  assert.equal(response.status, 502);
+  const body = await response.json();
+  assert.equal(body.kind, undefined);
+});
