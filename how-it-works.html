@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>How it works — Conge</title>
+  <meta name="description" content="How Conge scans a token: its data sources, the read-only Cloudflare Worker relay, every risk check it runs, and what it cannot detect." />
+
+  <link rel="icon" href="assets/favicon-512.png" type="image/png" sizes="512x512" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Conge" />
+  <meta property="og:title" content="How it works — Conge" />
+  <meta property="og:description" content="How Conge scans a token: its data sources, the read-only Cloudflare Worker relay, every risk check it runs, and what it cannot detect." />
+  <meta property="og:url" content="https://agrarisai.github.io/conge/how-it-works.html" />
+  <meta property="og:image" content="https://agrarisai.github.io/conge/assets/social-preview-1200x630.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="How it works — Conge" />
+  <meta name="twitter:description" content="How Conge scans a token: its data sources, the read-only Cloudflare Worker relay, every risk check it runs, and what it cannot detect." />
+  <meta name="twitter:image" content="https://agrarisai.github.io/conge/assets/social-preview-1200x630.png" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet"
+  />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <img class="logo" src="assets/conge-mark.png" alt="" height="36" />
+      <div class="brand">
+        <h1>Conge</h1>
+        <p class="tagline">TOKEN RISK SCANNER</p>
+      </div>
+    </div>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="index.html">Home</a>
+      <a href="how-it-works.html" aria-current="page">How it works</a>
+      <a href="faq.html">FAQ</a>
+      <a href="about.html">About</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="intro">
+      <h2 class="intro-headline">How Conge works</h2>
+      <p class="intro-sub">
+        Where the data comes from, exactly what each check looks at, and what it can't see.
+      </p>
+    </div>
+
+    <section class="card">
+      <h3>Data sources</h3>
+      <div class="prose">
+        <p>
+          <strong>Blockscout API v2</strong> is the primary source for everything — whether an
+          address is a contract, whether its source is verified, holder balances, market data,
+          and deployment time. It's a plain read-only HTTP API; Conge never needs a wallet or a
+          signature to query it.
+        </p>
+        <p>
+          A small <strong>Cloudflare Worker</strong> acts as a read-only RPC relay for exactly
+          two things Blockscout has no field for: reading a contract's <code>owner()</code>, and
+          the sell-simulation check below. The Worker only forwards a fixed allow-list of
+          read-only calls (<code>eth_chainId</code>, <code>eth_blockNumber</code>,
+          <code>eth_call</code>, <code>eth_getCode</code>) to the chain's RPC endpoint — nothing
+          that could move funds, change state, or sign anything passes through it, and it's
+          entirely optional: Conge still works, with a smaller set of checks, if the Worker is
+          ever unreachable.
+        </p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>The risk checks</h3>
+      <div class="prose">
+        <p>
+          Every check is transparent and rule-based — no model, no hidden scoring. The overall
+          level shown is the worst result among the checks that actually produced data; Conge
+          never uses the words "safe" or "secure".
+        </p>
+      </div>
+      <div class="check-list">
+        <div class="check-item">
+          <h4>Source code verified</h4>
+          <p>Whether the contract's source is published and verified on the block explorer. Unverified source is a high-risk flag on its own, and blocks the ABI-based checks below.</p>
+        </div>
+        <div class="check-item">
+          <h4>Holder concentration</h4>
+          <p>How much of the supply the largest holder, and the top 10 holders together, control — a single wallet or a small group holding too much can move the price on its own.</p>
+        </div>
+        <div class="check-item">
+          <h4>Holder count</h4>
+          <p>How many independent holders the token has. Very few holders means the price can be moved by a handful of wallets.</p>
+        </div>
+        <div class="check-item">
+          <h4>Token age</h4>
+          <p>How long ago the contract was deployed. Very new tokens haven't had time for problems, or scams, to surface.</p>
+        </div>
+        <div class="check-item">
+          <h4>Owner privileges</h4>
+          <p>Whether the contract is an upgradeable proxy, and — for verified contracts — whether its ABI exposes functions to mint new tokens, pause transfers, blacklist addresses, change fees, or cap transaction size.</p>
+        </div>
+        <div class="check-item">
+          <h4>Owner status</h4>
+          <p>Who currently holds owner privileges (via the Worker's read of <code>owner()</code>), or whether ownership has been renounced to the zero address.</p>
+        </div>
+        <div class="check-item">
+          <h4>Sell-simulation honeypot check</h4>
+          <p>Simulates, read-only, whether a normal holder can actually transfer the token to a detected liquidity pool — some tokens look fine on paper but silently block selling. See the limits below for exactly what this can and can't catch.</p>
+        </div>
+        <div class="check-item">
+          <h4>Market data</h4>
+          <p>Price, 24h volume, and market cap, shown for context. Informational only — it never affects the risk level.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>What Conge cannot detect</h3>
+      <div class="prose">
+        <p>None of this is an audit or a guarantee — it's a fast, transparent read of public data. Specific, known gaps:</p>
+        <ul>
+          <li><strong>Buy/sell tax.</strong> The sell-simulation check confirms a transfer isn't outright blocked, but can't measure a fee taken on top of it.</li>
+          <li><strong>Router-only logic.</strong> Some tokens only misbehave when the caller is a specific DEX router mid-swap — a direct transfer simulation from a holder doesn't reproduce that.</li>
+          <li><strong>Time- or amount-based traps.</strong> A token that only blocks transfers above a threshold, or after/before a certain time, can pass every check here while still being a trap in practice.</li>
+          <li><strong>Name-based checks aren't a bytecode audit.</strong> The owner-privilege check looks for functions by name in a verified ABI — a differently-named function with the same effect won't be caught.</li>
+          <li><strong>A scan sometimes can't finish.</strong> The owner and sell-simulation checks depend on a shared public RPC that can rate-limit under load — see the <a href="faq.html">FAQ</a> for what "Unknown" means when that happens.</li>
+        </ul>
+        <p>Always verify independently on the block explorer before acting on anything Conge shows you.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-grid">
+      <div class="footer-col footer-col-brand">
+        <div class="footer-brand">
+          <img src="assets/conge-mark.png" alt="" height="24" />
+          <span>Conge</span>
+        </div>
+        <p class="footer-desc">A free, read-only risk scanner for tokens on Robinhood Chain.</p>
+        <p class="footer-disclaimer-short">
+          Read-only, automated checks can miss scams, not financial advice.
+          <a href="disclaimer.html">Full disclaimer</a>.
+        </p>
+      </div>
+      <div class="footer-col">
+        <p class="footer-col-heading">Product</p>
+        <ul class="footer-links">
+          <li><a href="how-it-works.html">How it works</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <p class="footer-col-heading">Resources</p>
+        <ul class="footer-links">
+          <li><a href="https://github.com/agrarisai/conge" target="_blank" rel="noopener noreferrer">GitHub repo</a></li>
+          <li><a href="https://github.com/agrarisai/conge/issues" target="_blank" rel="noopener noreferrer">Report an issue</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <p class="footer-col-heading">Legal</p>
+        <ul class="footer-links">
+          <li><a href="disclaimer.html">Disclaimer</a></li>
+          <li><a href="about.html">About</a></li>
+        </ul>
+      </div>
+    </div>
+    <p class="footer-fine-print">
+      © <span id="footer-year">2026</span> Conge · Not affiliated with Robinhood Markets, Inc. · Always verify
+      independently on the <a href="https://robinhoodchain.blockscout.com" target="_blank" rel="noopener noreferrer">block explorer</a>.
+    </p>
+  </footer>
+
+  <script>
+    document.getElementById("footer-year").textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>

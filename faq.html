@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FAQ — Conge</title>
+  <meta name="description" content="Common questions about Conge: financial advice, wallet access, why a scan sometimes says Unknown, Robinhood affiliation, and how risk level is decided." />
+
+  <link rel="icon" href="assets/favicon-512.png" type="image/png" sizes="512x512" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Conge" />
+  <meta property="og:title" content="FAQ — Conge" />
+  <meta property="og:description" content="Common questions about Conge: financial advice, wallet access, why a scan sometimes says Unknown, Robinhood affiliation, and how risk level is decided." />
+  <meta property="og:url" content="https://agrarisai.github.io/conge/faq.html" />
+  <meta property="og:image" content="https://agrarisai.github.io/conge/assets/social-preview-1200x630.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="FAQ — Conge" />
+  <meta name="twitter:description" content="Common questions about Conge: financial advice, wallet access, why a scan sometimes says Unknown, Robinhood affiliation, and how risk level is decided." />
+  <meta name="twitter:image" content="https://agrarisai.github.io/conge/assets/social-preview-1200x630.png" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet"
+  />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <img class="logo" src="assets/conge-mark.png" alt="" height="36" />
+      <div class="brand">
+        <h1>Conge</h1>
+        <p class="tagline">TOKEN RISK SCANNER</p>
+      </div>
+    </div>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="index.html">Home</a>
+      <a href="how-it-works.html">How it works</a>
+      <a href="faq.html" aria-current="page">FAQ</a>
+      <a href="about.html">About</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="intro">
+      <h2 class="intro-headline">Frequently asked questions</h2>
+      <p class="intro-sub">The questions people actually ask about Conge.</p>
+    </div>
+
+    <section class="card">
+      <div class="faq-list">
+        <details class="faq-item">
+          <summary>Is this financial advice?</summary>
+          <p>
+            No. Conge shows automated, rule-based checks on public data — it is not financial
+            advice, and it never tells you to buy, sell, or hold anything. Always verify
+            independently before acting on anything it shows.
+          </p>
+        </details>
+
+        <details class="faq-item">
+          <summary>Does Conge ever ask for my wallet or private key?</summary>
+          <p>
+            No. Conge is entirely read-only. It never requests a wallet connection, a signature,
+            a private key, or a transaction of any kind — it only reads public on-chain and
+            block-explorer data.
+          </p>
+        </details>
+
+        <details class="faq-item">
+          <summary>Why does a scan sometimes say "Unknown"?</summary>
+          <p>
+            Usually the shared public RPC that Conge's Worker relays through is rate-limited —
+            it's a third-party endpoint shared by everyone using this chain, and it has a tight
+            limit. Conge already retries automatically, at both the Worker and the app level, but
+            under load a check can still come back "Unknown" rather than a real result. This is
+            expected, not a bug — the finding says so directly, and clicking <strong>Rescan</strong>
+            a little later usually goes through.
+          </p>
+        </details>
+
+        <details class="faq-item">
+          <summary>Is Conge affiliated with Robinhood?</summary>
+          <p>
+            No. Conge is not affiliated with, endorsed by, or connected to Robinhood Markets,
+            Inc. in any way. It's an independent project that happens to support Robinhood
+            Chain, a network operated by someone else.
+          </p>
+        </details>
+
+        <details class="faq-item">
+          <summary>Is the code open source?</summary>
+          <p>
+            Yes — the whole site, the risk-scoring logic, and the Cloudflare Worker proxy are
+            public on
+            <a href="https://github.com/agrarisai/conge" target="_blank" rel="noopener noreferrer">GitHub</a>.
+          </p>
+        </details>
+
+        <details class="faq-item">
+          <summary>How is risk level decided?</summary>
+          <p>
+            By a fixed set of transparent, rule-based checks — no model, no hidden scoring. See
+            <a href="how-it-works.html">how it works</a> for the full list of checks and what
+            each one means.
+          </p>
+        </details>
+
+        <details class="faq-item">
+          <summary>What chain does Conge support?</summary>
+          <p>
+            Robinhood Chain mainnet (chain ID 4663) only, for now. Support for other chains isn't
+            currently planned but could be added later.
+          </p>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-grid">
+      <div class="footer-col footer-col-brand">
+        <div class="footer-brand">
+          <img src="assets/conge-mark.png" alt="" height="24" />
+          <span>Conge</span>
+        </div>
+        <p class="footer-desc">A free, read-only risk scanner for tokens on Robinhood Chain.</p>
+        <p class="footer-disclaimer-short">
+          Read-only, automated checks can miss scams, not financial advice.
+          <a href="disclaimer.html">Full disclaimer</a>.
+        </p>
+      </div>
+      <div class="footer-col">
+        <p class="footer-col-heading">Product</p>
+        <ul class="footer-links">
+          <li><a href="how-it-works.html">How it works</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <p class="footer-col-heading">Resources</p>
+        <ul class="footer-links">
+          <li><a href="https://github.com/agrarisai/conge" target="_blank" rel="noopener noreferrer">GitHub repo</a></li>
+          <li><a href="https://github.com/agrarisai/conge/issues" target="_blank" rel="noopener noreferrer">Report an issue</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <p class="footer-col-heading">Legal</p>
+        <ul class="footer-links">
+          <li><a href="disclaimer.html">Disclaimer</a></li>
+          <li><a href="about.html">About</a></li>
+        </ul>
+      </div>
+    </div>
+    <p class="footer-fine-print">
+      © <span id="footer-year">2026</span> Conge · Not affiliated with Robinhood Markets, Inc. · Always verify
+      independently on the <a href="https://robinhoodchain.blockscout.com" target="_blank" rel="noopener noreferrer">block explorer</a>.
+    </p>
+  </footer>
+
+  <script>
+    document.getElementById("footer-year").textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>

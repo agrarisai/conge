@@ -375,12 +375,63 @@ either. It's built entirely with plain CSS custom properties in
   `:focus-visible` outline in ink, not a color too light to see reliably
   or a decorative box-shadow.
 
+## Pages
+
+Alongside the scanner itself (`index.html`), the site has four static
+content pages — plain HTML files at the repo root, same
+head/meta/favicon pattern as `index.html`, no build step, no JavaScript
+of their own (they don't load `app.js` — there's no scanning UI on
+them, so none of its DOM lookups apply):
+
+- **`about.html`** — what Conge is, and a short, honest note on who
+  built it: an independent, solo/small project, explicitly **not**
+  affiliated with Robinhood Markets, Inc. No team bios, no company
+  language — there's no company.
+- **`how-it-works.html`** — the data pipeline (Blockscout API v2 as the
+  primary source, the Cloudflare Worker as a read-only RPC relay for
+  exactly two extra checks) and the full list of Risk Score v1 checks in
+  plain English, adapted from the [Risk Score v1](#risk-score-v1)
+  section above rather than inventing new ones. Ends with what Conge
+  cannot detect (buy/sell tax, router-only logic, time/amount-based
+  traps — from that section's "Limits" notes).
+- **`faq.html`** — real questions this project gets, as
+  `<details>`/`<summary>` disclosures (the same pattern used for
+  Technical details elsewhere): whether it's financial advice, whether
+  it ever asks for a wallet or key (no), why a scan sometimes says
+  Unknown (the shared RPC's rate limit — see
+  [Known limitations](#known-limitations)), Robinhood affiliation (none),
+  whether the code is open source (yes, linked), and how risk level is
+  decided (linked to `how-it-works.html`).
+- **`disclaimer.html`** — the short footer disclaimer, expanded: read-only/no
+  custody, not financial advice, automated checks can miss scams, not
+  affiliated with Robinhood Markets Inc., verify independently. It says
+  directly that Conge isn't a company and this isn't a real legal
+  document — deliberately no invented legal boilerplate, and
+  deliberately no Terms of Service or Privacy Policy page, since Conge
+  collects no user data or accounts and there'd be nothing real to put
+  in one.
+
+**Navigation** is identical on every page: a top nav (Home, How it
+works, FAQ, About — `disclaimer.html` is reachable from the footer, not
+the top nav, matching how it's referenced elsewhere) with the current
+page underlined, and a shared footer with four columns (Brand, Product,
+Resources, Legal) plus a small-print line with the current year (set by
+a couple of inline lines of vanilla JS on each page — no build step, and
+it degrades to whatever static year is already in the markup if that
+JS doesn't run) and the Robinhood-affiliation disclaimer. Both reuse the
+same `style.css` tokens as the redesign — no new colors, fonts, or
+spacing scale introduced for these pages.
+
 ## Project structure
 
 ```
-index.html          # page structure
-style.css            # styling (mobile-first, light theme)
-app.js               # app logic (ES module, imports viem utils + scoring.js)
+index.html          # the scanner itself — page structure
+about.html           # content page — see "Pages" below
+how-it-works.html    # content page — see "Pages" below
+faq.html             # content page — see "Pages" below
+disclaimer.html      # content page — see "Pages" below
+style.css            # styling for every page above (mobile-first, light theme)
+app.js               # app logic for index.html only (ES module, imports viem utils + scoring.js)
 scoring.js           # Risk Score v1 — pure, rule-based scoring + ABI helpers
 tests/scoring.test.js  # unit tests for scoring.js (node --test)
 assets/              # brand imagery — see "Branding assets" below
@@ -451,7 +502,9 @@ this codebase):
   the crawlers that read these tags don't resolve relative URLs against
   the page the way a browser does. If this site is ever moved to a
   different URL, update `og:url`/`og:image`/`twitter:image` in
-  `index.html` to match.
+  **every** HTML file (`index.html` and the four pages under
+  [Pages](#pages) above) to match — each has its own `og:url` pointing
+  at itself, sharing the same `og:image`.
 
 To replace any of these, just overwrite the file in `assets/` — no code
 changes needed as long as the filename stays the same.
