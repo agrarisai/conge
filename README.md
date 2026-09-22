@@ -33,14 +33,20 @@ headers for this site's origin.
   cross-checked against `CONFIG.chainId` and flagged if it doesn't match.
   Every fetch (Blockscout and the Worker) is a plain `fetch()` call with a
   timeout — not viem's transport — so failures can be classified
-  precisely: network/CORS/TLS failure vs. an HTTP error (403/429/5xx) vs.
-  a JSON-RPC error vs. an unparseable body. The **Data source** row always
-  says which source(s) the displayed values came from. If the primary
-  source fails, a collapsible **Technical details** panel shows the raw
-  error name/message, HTTP status (if any), the URL that was tried, and
-  the page's origin for every source attempted — see
+  precisely: network/CORS/TLS failure vs. a Worker-side rejection (origin
+  not allowed, malformed/oversized request, or its own upstream RPC
+  failing — each shown as its own distinct kind, not a generic "HTTP
+  error") vs. a JSON-RPC error vs. an unparseable body. The **Data
+  source** row always says which source(s) the displayed values came
+  from. If the primary source fails, a collapsible **Technical details**
+  panel shows the raw error name/message, HTTP status (if any), the first
+  300 characters of the response body, the URL that was tried, and the
+  page's origin for every source attempted — see
   [Troubleshooting network connectivity](#troubleshooting-network-connectivity)
-  below. A **Retry connection** button re-runs the whole check.
+  below. A **Retry connection** button re-runs the whole check, and a
+  **Test Worker connection** button runs an independent, on-demand
+  self-test of the Worker specifically (see
+  [Worker](#worker) below).
 - **Scan a token** — enter a contract address and Conge looks it up via
   Blockscout endpoints called in parallel: `GET /addresses/{address}` (is
   it a contract, is it verified), `GET /tokens/{address}` (name, symbol,
@@ -57,7 +63,10 @@ headers for this site's origin.
   than a guess, and the result card's **Data source** row says exactly
   which source(s) contributed. If any Blockscout request fails outright
   (not a "not found"), a collapsible **Technical details** panel shows the
-  real error for each request that was made.
+  real error for each request that was made. The **Owner status** and
+  **Sell-simulation honeypot check** findings each get their own
+  collapsible **Technical details** too, specifically when their own
+  Worker call failed — see [below](#sell-simulation-honeypot-check).
 - **Risk Score v1** — every scan of a contract also runs a transparent,
   rule-based risk check (see below) and shows a summary card — overall
   level, then findings grouped by severity — above the token details.
@@ -192,7 +201,18 @@ It runs three steps, entirely through the [Worker](#worker) RPC proxy:
 
 Every finding shows a **"How this was checked"** collapsible: which
 holder(s) were used, which pool addresses were detected, and which calls
-succeeded or failed — each address linked to its Blockscout page.
+succeeded or failed — each address linked to its Blockscout page. When the
+outcome is **Unknown because the Worker/RPC could not be reached** (or a
+specific call to it errored), the finding also gets its own collapsible
+**Technical details** — the same format as the network-status and scan
+Technical details panels: which call it was (`owner()` / `token0()` /
+`token1()` / the `transfer()` simulation), the URL, the page's origin, the
+browser error name/message, the HTTP status (if any), the first 300
+characters of the response body, and a `kind` classification
+(`network-or-cors`, `timeout`, `origin-rejected`, `validation-rejected`,
+`upstream-unreachable`, or `json-rpc-error` — see
+[Worker](#worker) below for what each one means). This applies to the
+**Owner status** finding too, for the same reason.
 
 **Limits, by design:**
 - It **cannot measure buy/sell tax** — a transfer can succeed while still
@@ -531,6 +551,93 @@ status chain-ID cross-check, the owner check, and the sell-simulation
 honeypot check — goes through it; there is no direct-to-upstream code
 path left in `app.js`. If you deploy your own copy of the Worker (a
 different Cloudflare account/subdomain), update `WORKER_URL` to match.
+
+### Diagnosing a Worker connection problem
+
+`GET /health` opened directly in a browser tab is a **top-level
+navigation, not subject to CORS** — it only proves the Worker itself is up
+and can reach its upstream RPC. It does **not** prove that a cross-origin
+`fetch()` POST from `https://agrarisai.github.io` (what the site actually
+does) succeeds, since CORS is a browser-side restriction that only applies
+to that kind of request. If Network status, the owner check, or the
+sell-simulation check report the Worker/RPC as unreachable while `/health`
+works fine in a browser tab, use these in order:
+
+1. **The "Test Worker connection" button**, in the Network status card.
+   It sends two real POSTs straight from your browser: (a) a bare
+   `eth_chainId`, and (b) an `eth_call` that includes a `"from"` field
+   (`balanceOf()` on the most recently scanned token, or on the fixed
+   probe address if nothing's been scanned yet — never a guessed "real"
+   contract address). Each result is shown as either *"never reached the
+   Worker"* (the signature of a CORS/preflight failure — the browser
+   blocked the request before it left, or it timed out) or *"reached the
+   Worker, which rejected it"* (a validation rejection — the request
+   arrived and the Worker's own logic said no), with a **Technical
+   details** panel underneath showing the exact status/body/error for
+   each.
+2. **Any per-finding Technical details** — on the Owner status and
+   Sell-simulation findings themselves, whenever they're Unknown because
+   of a failed Worker call (see [above](#sell-simulation-honeypot-check)).
+3. **The `kind` classification** in any Technical details panel tells you
+   which of these happened:
+   - `network-or-cors` / `timeout` — the request **never reached the
+     Worker at all**. This is what a CORS/preflight rejection, an invalid
+     TLS certificate, or the Worker being fully down all look like from
+     inside the browser (it can't tell them apart — see
+     [Troubleshooting network connectivity](#troubleshooting-network-connectivity)
+     above).
+   - `origin-rejected` — the request reached the Worker, which returned
+     `403` because the `Origin` header wasn't `https://agrarisai.github.io`.
+   - `validation-rejected` — the request reached the Worker, which
+     rejected it as malformed or oversized (`400`/`413`) — a bug in the
+     request, not a CORS problem.
+   - `upstream-unreachable` — the Worker itself is fine and accepted the
+     request, but its own call to `rpc.mainnet.chain.robinhood.com`
+     failed (`502`).
+   - `json-rpc-error` — the Worker accepted the request and got a real
+     answer from upstream, but that specific call reverted or otherwise
+     errored (e.g. a contract with no `owner()` function) — not a
+     connectivity problem at all.
+
+**On the reported symptom** (Owner and sell-simulation both Unknown, while
+`/health` works): this PR reviewed `worker/index.js` line by line for
+anything that could cause a real browser POST to fail — CORS headers,
+origin matching, preflight handling, batch/param validation — and found
+nothing wrong against the CORS/JSON-RPC spec. To go further than reading
+the code, [`worker/tests/worker.test.js`](./worker/tests/worker.test.js)
+now drives the Worker's **actual `fetch(request)` entry point** (not just
+its internal pure functions) with real `Request` objects shaped exactly
+like a browser: a genuine preflight (`OPTIONS` with `Origin` +
+`Access-Control-Request-Method` + `Access-Control-Request-Headers`)
+followed by a real 10-item POST batch including an `eth_call` with a
+`"from"` field — both succeed with correct headers, and a same-origin
+check confirms a disallowed origin is still cleanly rejected with no
+wildcard fallback. **No code change was needed or made to
+`worker/index.js` in this PR** — it already behaves correctly for every
+scenario these tests (and manual code review) could construct.
+
+Since the code checks out but the live symptom is real, the most likely
+explanations are outside this file:
+- **The live deployment may not exactly match this repository's
+  `worker/index.js`** (a dashboard paste can silently diverge from the
+  repo over time). As a precaution, re-copy the current
+  `worker/index.js` into the Cloudflare dashboard and redeploy — see
+  [`worker/README.md`](./worker/README.md) for the exact steps (Workers &
+  Pages → your Worker → Edit code → paste → Save and deploy). This is
+  harmless either way: if the live code already matched, redeploying
+  changes nothing.
+- **A Cloudflare zone-level security feature** (e.g. Bot Fight Mode,
+  Browser Integrity Check) could in principle block a `fetch()`-originated
+  request while allowing a real top-level navigation like opening
+  `/health` in a tab. These are dashboard settings, not something this
+  code controls — check **Security** in the Cloudflare dashboard for the
+  zone this Worker is deployed under if the problem persists after a
+  redeploy.
+- Whatever the cause turns out to be, the "Test Worker connection" button
+  and the new per-finding Technical details above will now show the real
+  browser error, HTTP status, and response body directly, rather than a
+  bare "could not be reached" — please re-test on the live site and share
+  what they show if the issue isn't resolved by a redeploy.
 
 ## Security notes
 

@@ -70,8 +70,14 @@ export const THRESHOLDS = {
   },
 };
 
-function finding({ id, severity, known = true, countsTowardLevel = true, title, detail }) {
-  return { id, severity, known, countsTowardLevel, title, detail };
+// `diagnostics` (optional) is a list of raw network-failure diagnostics
+// from app.js (see fetchRaw/callWorkerBatch) for a finding whose "Unknown"
+// or "known: false" outcome was caused by a failed network/RPC call — only
+// owner-status and sell-simulation use it today, to back a per-finding
+// "Technical details" panel with the real error instead of a bare
+// "Unknown". Purely informational: never affects severity/known/scoring.
+function finding({ id, severity, known = true, countsTowardLevel = true, title, detail, diagnostics = null }) {
+  return { id, severity, known, countsTowardLevel, title, detail, diagnostics };
 }
 
 export function isBurnOrZeroAddress(address) {
@@ -161,6 +167,7 @@ export const SELECTOR = {
   owner: "0x8da5cb5b", // owner()
   token0: "0x0dfe1681", // token0()
   token1: "0xd21220a7", // token1()
+  balanceOf: "0x70a08231", // balanceOf(address) — used only by the "Test Worker connection" self-test
 };
 
 const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
@@ -644,7 +651,7 @@ export function scoreOwnerPrivileges(facts, thresholds = THRESHOLDS) {
 
 // --- Check 6: owner status --------------------------------------------------
 
-export function scoreOwnerStatus(owner) {
+export function scoreOwnerStatus(owner, diagnostics = null) {
   if (!owner) {
     return finding({
       id: "owner-status",
@@ -652,6 +659,7 @@ export function scoreOwnerStatus(owner) {
       severity: SEVERITY.INFO,
       title: "Owner unknown",
       detail: "The owner could not be read for this contract.",
+      diagnostics,
     });
   }
   const renounced = owner.toLowerCase() === ZERO_ADDRESS;
@@ -671,7 +679,11 @@ export function scoreOwnerStatus(owner) {
 // probes (see runSellSimulation in app.js) —
 //   { status: "unreachable" | "no-pool" | "no-holder" | "simulated",
 //     pools: [{ address, token0, token1 }],
-//     holderAttempts: [{ holder, baseline: {success,reason}, sells: [{pool,success,reason}] }] }
+//     holderAttempts: [{ holder, baseline: {success,reason}, sells: [{pool,success,reason}] }],
+//     diagnostics?: [<raw fetchRaw-style diagnostic>, ...] }
+// diagnostics is only present when status is "unreachable" — it's carried
+// through onto the finding so the UI can show real network errors instead
+// of a bare "Unknown" (see finding()'s diagnostics param above).
 // "unreachable"/"no-pool"/"no-holder" are all inconclusive outcomes —
 // known: false, grouped with "Info / unknown" in the UI, never counted
 // as a pass. Only "simulated" produces a real HIGH or a real (known)
@@ -686,6 +698,7 @@ export function scoreSellSimulation(simulation) {
       severity: SEVERITY.INFO,
       title: "Sell simulation unknown",
       detail: "The Worker/RPC could not be reached to simulate a transfer, so selling could not be tested.",
+      diagnostics: simulation?.diagnostics ?? null,
     });
   }
 
@@ -796,7 +809,7 @@ export function scoreToken(facts, thresholds = THRESHOLDS) {
       },
       thresholds,
     ),
-    scoreOwnerStatus(facts.owner),
+    scoreOwnerStatus(facts.owner, facts.ownerDiagnostics),
     scoreSellSimulation(facts.sellSimulation),
     scoreMarketData(facts.marketData ?? {}),
   ];

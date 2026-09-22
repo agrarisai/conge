@@ -341,6 +341,26 @@ input[type="text"]:focus {
   word-break: break-all;
 }
 
+.risk-finding-evidence pre {
+  margin: 0.35rem 0 0;
+  padding: 0.6rem 0.75rem;
+  background-color: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+#worker-test-result {
+  margin-top: 0.5rem;
+}
+
+#worker-test-summary p {
+  margin: 0.3rem 0;
+  font-size: 0.85rem;
+}
+
 .evidence-holder {
   margin-top: 0.5rem;
   padding-top: 0.5rem;

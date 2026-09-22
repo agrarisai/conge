@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
+import worker, {
   ALLOWED_ORIGINS,
   ALLOWED_METHODS,
   isAllowedOrigin,
@@ -17,6 +17,9 @@ import {
   validateRequest,
   parseBatch,
 } from "../index.js";
+
+const SITE_ORIGIN = "https://agrarisai.github.io";
+const WORKER_URL = "https://conge-rpc.agrarisai.workers.dev/";
 
 const VALID_ADDRESS = "0x1234567890123456789012345678901234567890";
 const OTHER_ADDRESS = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
@@ -249,4 +252,120 @@ test("parseBatch: an empty batch is rejected", () => {
   const result = parseBatch([]);
   assert.equal(result.ok, false);
   assert.equal(result.error.error.code, -32600);
+});
+
+// --- Full request handler: real browser preflight + POST simulation ------
+//
+// Everything above tests the pure validation/CORS building blocks in
+// isolation. These tests instead drive the actual `fetch(request)` entry
+// point (the default export — what Cloudflare invokes for a real request)
+// with real `Request` objects shaped exactly like a browser would send
+// them: a genuine CORS preflight (OPTIONS + Access-Control-Request-Method
+// + Access-Control-Request-Headers) followed by the real POST, including
+// a full 10-item batch with an eth_call that carries a "from" field. This
+// is the most direct way — short of a live deployment, which this
+// sandboxed environment's egress allowlist blocks — to confirm the Worker
+// doesn't have a CORS/validation bug: if either of these produced the
+// wrong headers or an unexpected rejection, these tests would fail.
+// globalThis.fetch is stubbed only for the upstream call inside
+// callUpstream(); nothing here touches the real network.
+
+test("full request handler: a real CORS preflight (OPTIONS + Access-Control-Request-*) from the site origin gets a correct 204", async () => {
+  const request = new Request(WORKER_URL, {
+    method: "OPTIONS",
+    headers: {
+      Origin: SITE_ORIGIN,
+      "Access-Control-Request-Method": "POST",
+      "Access-Control-Request-Headers": "content-type",
+    },
+  });
+  const response = await worker.fetch(request);
+  assert.equal(response.status, 204);
+  assert.equal(response.headers.get("access-control-allow-origin"), SITE_ORIGIN);
+  assert.equal(response.headers.get("access-control-allow-methods"), "POST, OPTIONS");
+  assert.match(response.headers.get("access-control-allow-headers").toLowerCase(), /content-type/);
+  assert.equal(response.headers.get("vary"), "Origin");
+  assert.doesNotMatch(response.headers.get("access-control-allow-origin"), /\*/);
+});
+
+test("full request handler: a preflight from a disallowed origin gets 403 with no CORS headers (no wildcard fallback)", async () => {
+  const request = new Request(WORKER_URL, {
+    method: "OPTIONS",
+    headers: {
+      Origin: "https://evil.example",
+      "Access-Control-Request-Method": "POST",
+      "Access-Control-Request-Headers": "content-type",
+    },
+  });
+  const response = await worker.fetch(request);
+  assert.equal(response.status, 403);
+  assert.equal(response.headers.get("access-control-allow-origin"), null);
+});
+
+test('full request handler: a real POST — a 10-item batch, one eth_call with "from" — from the site origin is accepted, forwarded upstream unchanged, and answered with CORS headers', async (t) => {
+  const originalFetch = globalThis.fetch;
+  let upstreamCalledWith = null;
+  globalThis.fetch = async (url, init) => {
+    upstreamCalledWith = { url, body: JSON.parse(init.body) };
+    const requests = Array.isArray(upstreamCalledWith.body) ? upstreamCalledWith.body : [upstreamCalledWith.body];
+    const results = requests.map((r) => ({ jsonrpc: "2.0", id: r.id, result: "0x1" }));
+    return new Response(JSON.stringify(results), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const batch = Array.from({ length: 10 }, (_, i) =>
+    i === 0
+      ? {
+          jsonrpc: "2.0",
+          id: i,
+          method: "eth_call",
+          params: [{ to: VALID_ADDRESS, from: OTHER_ADDRESS, data: "0xa9059cbb" }, "latest"],
+        }
+      : { jsonrpc: "2.0", id: i, method: "eth_chainId", params: [] },
+  );
+
+  const request = new Request(WORKER_URL, {
+    method: "POST",
+    headers: { Origin: SITE_ORIGIN, "Content-Type": "application/json" },
+    body: JSON.stringify(batch),
+  });
+  const response = await worker.fetch(request);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("access-control-allow-origin"), SITE_ORIGIN);
+
+  const body = await response.json();
+  assert.equal(body.length, 10);
+
+  // The Worker forwarded all 10 — none were rejected by validation — and
+  // the eth_call's "from" field reached the upstream request unchanged.
+  assert.ok(upstreamCalledWith);
+  assert.equal(upstreamCalledWith.body.length, 10);
+  assert.equal(upstreamCalledWith.body[0].params[0].from, OTHER_ADDRESS);
+  assert.equal(upstreamCalledWith.body[0].params[0].to, VALID_ADDRESS);
+});
+
+test("full request handler: a real POST from a disallowed origin is rejected with 403 and never reaches the upstream fetch", async (t) => {
+  const originalFetch = globalThis.fetch;
+  let upstreamWasCalled = false;
+  globalThis.fetch = async () => {
+    upstreamWasCalled = true;
+    throw new Error("upstream should never be called for a disallowed origin");
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const request = new Request(WORKER_URL, {
+    method: "POST",
+    headers: { Origin: "https://evil.example", "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+  });
+  const response = await worker.fetch(request);
+
+  assert.equal(response.status, 403);
+  assert.equal(response.headers.get("access-control-allow-origin"), null);
+  assert.equal(upstreamWasCalled, false);
 });
