@@ -100,7 +100,7 @@ just a different color on the same sentence).
 
 Findings are grouped in the UI by outcome, in this order: **High risk**,
 **Medium risk**, **Low risk**, **Passed** (a check ran and came back
-clean — calm, neutral styling, not the brand green), then **Info /
+clean — calm, neutral styling, not brand-colored), then **Info /
 unknown** (the check's data simply wasn't available). Unknown is never
 grouped with Passed and never counted as a pass — it's excluded from the
 overall-level math entirely.
@@ -333,20 +333,34 @@ either. It's built entirely with plain CSS custom properties in
 
 - **Color** — ivory (`--color-bg`, `#FAF9F4`) background, ink
   (`--color-ink`, `#0F1115`) primary text, slate (`--color-slate`,
-  `#63665F`) secondary text. The brand's signal green
-  (`--color-accent`, `#03FA73`) is reserved for the mark, the primary
-  button, and small status dots/borders — it's **never used as body
-  text**, since it's too light to read reliably on ivory or white (a raw
-  contrast check puts it well under WCAG's 3:1 floor even for large
-  UI elements). Risk severity has its own three-tone system layered on
-  top — green/amber/rose for low/medium/high — but each tone is a
-  **pair**: a pale tint for backgrounds and a separately deepened,
-  contrast-checked shade of the same hue for any text drawn in that
-  color (`--tone-{green,amber,rose}-{bg,text,border}` — every text
-  pairing in this system measures at 4.5:1 or better, most above 6:1).
-  A "Passed" finding is deliberately **neutral**, not green — a clean
-  token shouldn't read as a wall of celebratory color, and green stays
-  meaningful for when it's actually flagging something as low-risk.
+  `#63665F`) secondary text. The brand accent is a **signal blue**
+  (`--color-accent`, `#0B84F3` — updated from an earlier signal green,
+  `#03FA73`, when the logo was replaced with the current target/radar
+  mark): buttons, links, the nav's current-page underline, and focus
+  rings. A raw contrast check on the new blue as small text/a dot came
+  in just under 4.5:1, so there's a separately deepened
+  `--color-accent-text` (`#0A66B8`, 5.5–5.8:1) for exactly that case —
+  currently just the "Connected" network-status text/dot, a brand/
+  operational signal rather than a risk level, which is why it moved to
+  blue along with the rest of the accent rather than staying on the
+  risk-tone green (see below). A two-stop gradient
+  (`--color-accent-gradient`, blue to `--color-accent-secondary`
+  `#00E0FF` cyan) — matching the brand mark's own art — is used
+  sparingly, only for small square accent marks like the dot next to
+  the header tagline; everywhere else the accent is the flat, solid
+  blue. **This is a brand-accent swap only, not a risk-color change:**
+  risk severity keeps its own separate three-tone system —
+  green/amber/rose for low/medium/high — layered on top, each tone a
+  **pair** of a pale background tint and a separately deepened,
+  contrast-checked text shade of the same hue
+  (`--tone-{green,amber,rose}-{bg,text,border}` — every text pairing
+  measures 4.5:1 or better, most above 6:1). These `--tone-*` values are
+  their own tokens, distinct from `--color-accent*`, specifically so a
+  brand refresh like this one doesn't accidentally recolor what a risk
+  level means. A "Passed" finding is deliberately **neutral**, not
+  green — a clean token shouldn't read as a wall of celebratory color,
+  and green stays meaningful for when it's actually flagging something
+  as low-risk.
 - **Type** — headings in **Space Grotesk** (the same face used in the
   wordmark), body text in **Inter**, and anything that's data — addresses,
   amounts, the whole token-details table, every Technical details code
@@ -367,13 +381,17 @@ either. It's built entirely with plain CSS custom properties in
   identical grey cards, then a two-column token-details summary (it
   widens from one label/value pair per row to two side by side once
   there's room, rather than staying a long single-column stack). No
-  drop shadows, no gradients, no icon decoration, no numbered
-  01/02/03 markers — the hierarchy comes from type, color, and spacing
-  alone.
+  drop shadows, no icon decoration, no numbered 01/02/03 markers — the
+  hierarchy comes from type, color, and spacing alone. The one
+  deliberate exception to "no gradients" is the small brand-accent
+  square described above, matching the logo's own art; it's never used
+  as a background wash or decoration anywhere else.
 - **Focus states** — every interactive element (links, buttons, the
   address input, `<summary>` disclosures) gets the same visible
-  `:focus-visible` outline in ink, not a color too light to see reliably
-  or a decorative box-shadow.
+  `:focus-visible` outline in the brand accent blue (a raw contrast
+  check confirmed it clears the 3:1 a focus ring needs — the old signal
+  green did not, which is why focus rings used ink instead until this
+  color swap), not a decorative box-shadow.
 
 ## Pages
 
@@ -489,10 +507,13 @@ or rename this repo, update those URLs to match the new address.
 All brand imagery lives in `assets/` and is used as-is (never modified by
 this codebase):
 
-- `assets/conge-mark.png` — the bird mark, shown in the header next to
-  the "Conge" wordmark (`index.html`'s `.logo` image). It's non-square
-  (858×494); the CSS only constrains height, so it keeps its aspect ratio
-  rather than being stretched into a box.
+- `assets/conge-mark.png` — the brand mark (a target/radar "C"), shown
+  in the header next to the "Conge" wordmark on every page (`.logo`
+  image). It's non-square (729×618); the CSS only constrains height, so
+  it keeps its aspect ratio rather than being stretched into a box. An
+  earlier version of this mark (a bird, in solid signal green) was
+  replaced with the current blue-gradient version — see
+  [Design](#design) above for the color-token change that went with it.
 - `assets/favicon-512.png` — the site favicon (`<link rel="icon">`).
 - `assets/apple-touch-icon.png` — the icon iOS uses when the site is
   added to a home screen (`<link rel="apple-touch-icon">`).

@@ -6,8 +6,11 @@
   --color-slate: #63665F; /* secondary / muted text */
   --color-border: #E4E2D8; /* hairline borders on ivory */
   --color-border-strong: #D6D3C6;
-  --color-accent: #03FA73; /* signal green — brand mark, dots, chips. Never body text: too light to read. */
-  --color-accent-ink: #04140B; /* near-black text for use ON the bright accent (e.g. primary button) */
+  --color-accent: #0B84F3; /* signal blue — brand mark, buttons, links, focus states. Was #03FA73 (green) before the logo refresh. */
+  --color-accent-secondary: #00E0FF; /* the gradient's second stop (cyan) */
+  --color-accent-gradient: linear-gradient(135deg, var(--color-accent), var(--color-accent-secondary));
+  --color-accent-text: #0A66B8; /* deepened, contrast-safe blue for small text/dots (e.g. "Connected") — raw --color-accent measures under 4.5:1 as text, same reasoning as the --tone-*-text pairs below */
+  --color-accent-ink: #04140B; /* near-black text for use ON the bright accent (e.g. primary button) — still 5:1+ on the new blue */
   --color-amber: #D98F2B;
   --color-rose: #E5484D;
   --radius: 12px;
@@ -73,13 +76,15 @@ h1, h2, h3, h4 {
 }
 
 /* --- Focus states ---------------------------------------------------
-   One consistent, clearly visible focus ring everywhere — ink on ivory
-   passes contrast reliably in a way a light brand-green ring would not. */
+   One consistent, clearly visible focus ring everywhere, in the brand
+   accent — unlike the old signal green (a 1.4:1 non-text contrast on
+   white, well under the 3:1 a focus ring needs), the new signal blue
+   measures 3.5–3.7:1 on ivory/white, comfortably clearing that bar. */
 a:focus-visible,
 button:focus-visible,
 input:focus-visible,
 summary:focus-visible {
-  outline: 2px solid var(--color-ink);
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -119,6 +124,20 @@ summary:focus-visible {
   letter-spacing: 0.1em;
   color: var(--color-slate);
   text-transform: uppercase;
+}
+
+/* The small square accent mark from the new brand mark/social-preview
+   art, echoed next to the tagline — one of the few places the two-stop
+   gradient is used (everywhere else the brand accent is the flat,
+   solid blue, per the logo refresh). Decorative only. */
+.tagline-dot {
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  margin-right: 0.45em;
+  border-radius: 2px;
+  background: var(--color-accent-gradient);
+  vertical-align: middle;
 }
 
 .site-nav {
@@ -368,13 +387,14 @@ main {
 }
 
 .status-ok {
-  color: var(--tone-green-text);
+  /* A "connected" status is a brand/operational signal, not a risk
+     level — it moves to the new signal blue along with the rest of the
+     brand accent, rather than staying on the risk-tone green. */
+  color: var(--color-accent-text);
 }
 
 .status-ok::before {
-  /* The raw brand green is too light to register as a dot against white
-     (fails non-text contrast) — use the same deepened tone as the text. */
-  background-color: var(--tone-green-text);
+  background-color: var(--color-accent-text);
 }
 
 .status-bad {
