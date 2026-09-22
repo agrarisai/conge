@@ -336,14 +336,14 @@ either. It's built entirely with plain CSS custom properties in
   `#63665F`) secondary text. The brand accent is a **signal blue**
   (`--color-accent`, `#0B84F3` — updated from an earlier signal green,
   `#03FA73`, when the logo was replaced with the current target/radar
-  mark): buttons, links, the nav panel's current-page accent border, and
-  focus rings. A raw contrast check on the new blue as small text/a dot came
-  in just under 4.5:1, so there's a separately deepened
-  `--color-accent-text` (`#0A66B8`, 5.5–5.8:1) for exactly that case —
-  currently just the "Connected" network-status text/dot, a brand/
+  mark): buttons, links, and focus rings. A raw contrast check on the new
+  blue as small text/a dot came in just under 4.5:1, so there's a
+  separately deepened `--color-accent-text` (`#0A66B8`, 5.5–5.8:1) for
+  exactly that case: the "Connected" network-status text/dot (a brand/
   operational signal rather than a risk level, which is why it moved to
   blue along with the rest of the accent rather than staying on the
-  risk-tone green (see below). A two-stop gradient
+  risk-tone green — see below) and the nav panel's current-page link. A
+  two-stop gradient
   (`--color-accent-gradient`, blue to `--color-accent-secondary`
   `#00E0FF` cyan) — matching the brand mark's own art — is used
   sparingly, only for small square accent marks like the dot next to
@@ -431,27 +431,37 @@ them, so none of its DOM lookups apply). Like every page, they do load
   in one.
 
 **Navigation** is identical on every page: a hamburger button on the
-right of the header, next to the logo/wordmark, that toggles a dropdown
-panel (Home, How it works, About, FAQ — `disclaimer.html` is reachable
-from the footer, not this menu, matching how it's referenced elsewhere)
-with the current page marked via `aria-current="page"` (styled with a
-left accent border + tinted background rather than the old inline nav's
-underline). The panel closes on selecting a link, pressing Escape, or
-clicking outside it; focus returns to the toggle button on close; the
-icon morphs between hamburger and × off the button's own
-`aria-expanded` state; and the open/close transition is skipped under
-`prefers-reduced-motion: reduce`. All of this lives in one shared
-`nav.js` (vanilla JS, no dependencies), loaded identically by every page
-so the behavior can't drift between them — same pattern as the header
-markup itself, which is copy-pasted identically rather than templated,
-since there's no build step to share it otherwise. The footer is a
-separate shared block, four columns (Brand, Product, Resources, Legal)
-plus a small-print line with the current year (set by a couple of inline
-lines of vanilla JS on each page — no build step, and it degrades to
-whatever static year is already in the markup if that JS doesn't run)
-and the Robinhood-affiliation disclaimer. Both the header and footer
-reuse the same `style.css` tokens as the redesign — no new colors,
-fonts, or spacing scale introduced for these pages.
+right of the header, next to the logo/wordmark, that opens a full-height
+panel sliding in from the right over a dimmed overlay (Home, How it
+works, About, FAQ — `disclaimer.html` is reachable from the footer, not
+this menu, matching how it's referenced elsewhere), rather than a small
+dropdown. The panel has its own header row ("Menu" in the site's
+headline font, plus a close button of the same visual weight as the
+hamburger it replaces), then each link as a full-width, generously
+padded row with a hairline divider, current page marked via
+`aria-current="page"` in the deepened accent blue used everywhere else
+text needs to sit on the raw brand blue (`--color-accent-text`, not the
+under-contrast `--color-accent` itself). It closes on selecting a link,
+pressing Escape, clicking the overlay, or the panel's own close button;
+focus is trapped inside the panel while open (`Tab`/`Shift+Tab` wrap
+between the close button and the last link) and returns to the hamburger
+button on close; the hamburger's icon still morphs into a × off its own
+`aria-expanded` state (it's simply covered by the panel/overlay once
+open, at the widths where the panel doesn't leave it visible); the panel
+scrolls internally if its content ever exceeds viewport height; and the
+slide-in transition is skipped under `prefers-reduced-motion: reduce`.
+All of this lives in one shared `nav.js` (vanilla JS, no dependencies),
+loaded identically by every page so the behavior can't drift between
+them — same pattern as the header markup itself, which is copy-pasted
+identically rather than templated, since there's no build step to share
+it otherwise. The footer is a separate shared block, four columns
+(Brand, Product, Resources, Legal) plus a small-print line with the
+current year (set by a couple of inline lines of vanilla JS on each page
+— no build step, and it degrades to whatever static year is already in
+the markup if that JS doesn't run) and the Robinhood-affiliation
+disclaimer. Both the header and footer reuse the same `style.css` tokens
+as the redesign — no new colors, fonts, or spacing scale introduced for
+these pages.
 
 ## Project structure
 
