@@ -1,26 +1,49 @@
 :root {
-  --color-bg: #FAF9F4;
-  --color-text: #0B0C10;
-  --color-accent: #03FA73;
-  --color-border: #E4E2D8;
-  --color-card-bg: #FFFFFF;
-  --color-error-bg: #FDECEC;
-  --color-error-text: #8A1C1C;
-  --color-muted: #5B5D63;
-  --radius: 10px;
-  --spacing: 1rem;
+  /* --- Brand tokens ------------------------------------------------- */
+  --color-bg: #FAF9F4; /* ivory */
+  --color-surface: #FFFFFF; /* card surfaces, lifted off the ivory bg */
+  --color-ink: #0F1115; /* primary text */
+  --color-slate: #63665F; /* secondary / muted text */
+  --color-border: #E4E2D8; /* hairline borders on ivory */
+  --color-border-strong: #D6D3C6;
+  --color-accent: #03FA73; /* signal green — brand mark, dots, chips. Never body text: too light to read. */
+  --color-accent-ink: #04140B; /* near-black text for use ON the bright accent (e.g. primary button) */
+  --color-amber: #D98F2B;
+  --color-rose: #E5484D;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --spacing: 1.25rem;
 
-  /* Risk levels — deliberately neutral warning tones, not the brand green. */
-  --risk-info-bg: #EEF1F4;
-  --risk-info-text: #3A4750;
-  --risk-low-bg: #E4EEF2;
-  --risk-low-text: #1F5C73;
-  --risk-medium-bg: #FFF1D6;
-  --risk-medium-text: #8A5A00;
-  --risk-high-bg: #FDECEC;
-  --risk-high-text: #8A1C1C;
-  --risk-unknown-bg: #EFEFEF;
-  --risk-unknown-text: #5B5D63;
+  /* --- Type ------------------------------------------------------- */
+  --font-heading: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* --- Semantic tones -----------------------------------------------
+     Each tone pairs a pale background with a deepened, contrast-safe
+     text color from the same hue (the raw brand colors above are far
+     too light to use as text on ivory/white). "Passed" deliberately
+     does NOT use the green tone — it's neutral, so a clean scan reads
+     as calm and resolved rather than a wall of celebratory green. */
+  --tone-green-bg: #E3FBEC;
+  --tone-green-text: #0B6B3A;
+  --tone-green-border: #03D468;
+
+  --tone-amber-bg: #FBF1DE;
+  --tone-amber-text: #8A5A17;
+  --tone-amber-border: var(--color-amber);
+
+  --tone-rose-bg: #FBE7E8;
+  --tone-rose-text: #A21C25;
+  --tone-rose-border: var(--color-rose);
+
+  --tone-neutral-bg: #F2F1EA;
+  --tone-neutral-text: var(--color-ink);
+  --tone-neutral-border: #B9BBAE;
+
+  --tone-unknown-bg: #EFEFEA;
+  --tone-unknown-text: var(--color-slate);
+  --tone-unknown-border: #C4C6BA;
 }
 
 * {
@@ -34,23 +57,44 @@ html, body {
 
 body {
   background-color: var(--color-bg);
-  color: var(--color-text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.55;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  -webkit-font-smoothing: antialiased;
 }
 
+h1, h2, h3, h4 {
+  font-family: var(--font-heading);
+  color: var(--color-ink);
+}
+
+/* --- Focus states ---------------------------------------------------
+   One consistent, clearly visible focus ring everywhere — ink on ivory
+   passes contrast reliably in a way a light brand-green ring would not. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* --- Header ----------------------------------------------------------- */
+
 .site-header {
-  padding: 1.25rem var(--spacing) 0.75rem;
+  padding: 1.5rem var(--spacing) 1.125rem;
   border-bottom: 1px solid var(--color-border);
 }
 
 .header-inner {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.7rem;
   max-width: 640px;
   margin: 0 auto;
 }
@@ -63,18 +107,21 @@ body {
 
 .brand h1 {
   margin: 0;
-  font-size: 1.5rem;
-  letter-spacing: 0.01em;
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .tagline {
-  margin: 0;
-  font-size: 0.7rem;
+  margin: 0.1rem 0 0;
+  font-size: 0.6875rem;
   font-weight: 600;
-  letter-spacing: 0.12em;
-  color: var(--color-muted);
+  letter-spacing: 0.1em;
+  color: var(--color-slate);
   text-transform: uppercase;
 }
+
+/* --- Layout ------------------------------------------------------------ */
 
 main {
   flex: 1;
@@ -88,20 +135,138 @@ main {
 }
 
 .card {
-  background-color: var(--color-card-bg);
+  background-color: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
-  padding: var(--spacing);
+  padding: 1.125rem 1.25rem;
 }
 
 .card h2 {
-  margin-top: 0;
-  font-size: 1.1rem;
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+/* --- Intro block --------------------------------------------------- */
+
+.intro {
+  padding: 0.25rem 0.1rem 0.25rem;
+}
+
+.intro-headline {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 1.375rem;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.intro-sub {
+  margin: 0.5rem 0 0;
+  font-size: 0.925rem;
+  color: var(--color-slate);
+  max-width: 46ch;
+}
+
+/* --- Section labels (small, calm — never tracked-out caps) --------- */
+
+.section-label {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-slate);
+}
+
+/* --- Network status: compact strip + collapsed details -------------- */
+
+.status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.status-strip-sep {
+  color: var(--color-border-strong);
+}
+
+.status-strip-block {
+  color: var(--color-slate);
+}
+
+.status-strip-block #network-block-number {
+  font-family: var(--font-mono);
+  color: var(--color-ink);
+}
+
+#network-name {
+  color: var(--color-slate);
+}
+
+.status-pending,
+.status-ok,
+.status-bad {
+  font-weight: 600;
+}
+
+.status-pending {
+  color: var(--color-slate);
+}
+
+.status-pending::before,
+.status-ok::before,
+.status-bad::before {
+  content: "";
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 999px;
+  margin-right: 0.4rem;
+  vertical-align: middle;
+}
+
+.status-pending::before {
+  background-color: var(--color-border-strong);
+}
+
+.status-ok {
+  color: var(--tone-green-text);
+}
+
+.status-ok::before {
+  /* The raw brand green is too light to register as a dot against white
+     (fails non-text contrast) — use the same deepened tone as the text. */
+  background-color: var(--tone-green-text);
+}
+
+.status-bad {
+  color: var(--tone-rose-text);
+}
+
+.status-bad::before {
+  background-color: var(--color-rose);
+}
+
+.status-more {
+  margin-top: 0.6rem;
+}
+
+.status-more > summary {
+  cursor: pointer;
+  color: var(--color-slate);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.status-more > summary:hover {
+  color: var(--color-ink);
 }
 
 .status-grid,
 .result-grid {
-  margin: 0;
+  margin: 0.6rem 0 0;
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 0.5rem 1rem;
@@ -113,223 +278,300 @@ main {
 }
 
 dt {
-  font-weight: 600;
-  color: var(--color-muted);
-  font-size: 0.85rem;
+  font-family: var(--font-body);
+  font-weight: 500;
+  color: var(--color-slate);
+  font-size: 0.8125rem;
 }
 
 dd {
   margin: 0;
   word-break: break-all;
-  font-size: 0.9rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
 }
 
-.status-pending {
-  color: var(--color-muted);
+.status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
 }
 
-.status-ok {
-  color: #0C7A3D;
-  font-weight: 600;
-}
-
-.status-ok::before {
-  content: "● ";
-  color: var(--color-accent);
-}
-
-.status-bad {
-  color: var(--color-error-text);
-  font-weight: 600;
-}
+/* --- Forms --------------------------------------------------------- */
 
 form {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.6rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
 }
 
 label {
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 
 input[type="text"] {
-  padding: 0.6rem 0.75rem;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
   font-size: 0.95rem;
-  font-family: monospace;
+  font-family: var(--font-mono);
   background-color: var(--color-bg);
-  color: var(--color-text);
+  color: var(--color-ink);
 }
 
-input[type="text"]:focus {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
+input[type="text"]::placeholder {
+  color: var(--color-slate);
+  opacity: 0.7;
 }
 
 .primary-button,
 .secondary-button {
   border: none;
-  border-radius: 8px;
-  padding: 0.65rem 1rem;
-  font-size: 0.95rem;
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 1.1rem;
+  font-family: var(--font-body);
+  font-size: 0.925rem;
   font-weight: 600;
   cursor: pointer;
+  transition: filter 0.1s ease, background-color 0.1s ease;
 }
 
 .primary-button {
   background-color: var(--color-accent);
-  color: #04140B;
+  color: var(--color-accent-ink);
 }
 
 .primary-button:hover {
-  filter: brightness(0.95);
+  filter: brightness(0.96);
 }
 
 .primary-button:disabled {
-  opacity: 0.6;
+  opacity: 0.55;
   cursor: not-allowed;
+  filter: none;
 }
 
 .secondary-button {
   background-color: transparent;
-  border: 1px solid var(--color-border);
-  color: var(--color-text);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-ink);
   align-self: flex-start;
-  margin-top: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.secondary-button:hover {
+  background-color: var(--color-bg);
+}
+
+.secondary-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .error-message {
-  background-color: var(--color-error-bg);
-  color: var(--color-error-text);
-  border-radius: 8px;
-  padding: 0.6rem 0.75rem;
+  background-color: var(--tone-rose-bg);
+  color: var(--tone-rose-text);
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 0.8rem;
   font-size: 0.85rem;
   margin: 0.5rem 0 0;
 }
 
+/* --- Technical details: inset mono code blocks ---------------------- */
+
 .tech-details {
   margin: 0.5rem 0 0;
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
 }
 
 .tech-details summary {
   cursor: pointer;
-  color: var(--color-muted);
+  color: var(--color-slate);
   font-weight: 600;
+}
+
+.tech-details summary:hover {
+  color: var(--color-ink);
 }
 
 .tech-details pre {
   margin: 0.5rem 0 0;
-  padding: 0.6rem 0.75rem;
+  padding: 0.75rem 0.85rem;
   background-color: var(--color-bg);
   border: 1px solid var(--color-border);
-  border-radius: 8px;
-  font-size: 0.78rem;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
+/* --- Result card ----------------------------------------------------- */
+
 .result-card {
-  margin-top: 1rem;
-  padding-top: 1rem;
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
   border-top: 1px solid var(--color-border);
 }
 
-.risk-summary {
+.result-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   margin-bottom: 1rem;
-  padding-bottom: 1rem;
+}
+
+.result-card-header h3 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.result-card-header .secondary-button {
+  margin-top: 0;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.825rem;
+  flex-shrink: 0;
+}
+
+.risk-summary {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1.25rem;
   border-bottom: 1px solid var(--color-border);
+}
+
+.risk-headline {
+  margin-bottom: 0.85rem;
 }
 
 .risk-level-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-bottom: 0.4rem;
+  gap: 0.65rem;
+  margin-bottom: 0.5rem;
 }
 
 .risk-level-label {
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
   font-weight: 600;
-  color: var(--color-muted);
+  color: var(--color-slate);
 }
 
 .risk-level-value {
   display: inline-block;
-  padding: 0.2rem 0.6rem;
+  padding: 0.3rem 0.85rem;
   border-radius: 999px;
+  font-family: var(--font-heading);
   font-weight: 700;
-  font-size: 0.95rem;
+  font-size: 1.375rem;
+  line-height: 1.2;
 }
 
-.risk-level-low { background-color: var(--risk-low-bg); color: var(--risk-low-text); }
-.risk-level-medium { background-color: var(--risk-medium-bg); color: var(--risk-medium-text); }
-.risk-level-high { background-color: var(--risk-high-bg); color: var(--risk-high-text); }
-.risk-level-insufficient-data { background-color: var(--risk-unknown-bg); color: var(--risk-unknown-text); }
+.risk-level-low { background-color: var(--tone-green-bg); color: var(--tone-green-text); }
+.risk-level-medium { background-color: var(--tone-amber-bg); color: var(--tone-amber-text); }
+.risk-level-high { background-color: var(--tone-rose-bg); color: var(--tone-rose-text); }
+.risk-level-insufficient-data { background-color: var(--tone-neutral-bg); color: var(--color-slate); }
+
+.risk-summary-sentence {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 500;
+  max-width: 44ch;
+}
 
 .risk-disclaimer {
   font-size: 0.78rem;
-  color: var(--color-muted);
-  margin: 0 0 0.75rem;
+  color: var(--color-slate);
+  margin: 0 0 0.9rem;
 }
 
 .risk-findings-group h4 {
-  font-size: 0.75rem;
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--color-muted);
-  margin: 0.75rem 0 0.4rem;
+  color: var(--color-slate);
+  margin: 0.9rem 0 0.5rem;
+}
+
+.risk-findings-group:first-child h4 {
+  margin-top: 0;
 }
 
 .risk-finding {
   border-left: 3px solid transparent;
-  border-radius: 6px;
-  padding: 0.45rem 0.65rem;
-  margin-bottom: 0.4rem;
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.5rem;
 }
 
 .risk-finding-title {
   margin: 0;
   font-weight: 600;
-  font-size: 0.88rem;
+  font-size: 0.9rem;
 }
 
 .risk-finding-detail {
-  margin: 0.2rem 0 0;
-  font-size: 0.8rem;
-  color: var(--color-muted);
+  margin: 0.25rem 0 0;
+  font-size: 0.825rem;
+  color: var(--color-slate);
 }
 
-.risk-finding-passed { background-color: var(--risk-info-bg); border-left-color: var(--risk-info-text); }
-.risk-finding-low { background-color: var(--risk-low-bg); border-left-color: var(--risk-low-text); }
-.risk-finding-medium { background-color: var(--risk-medium-bg); border-left-color: var(--risk-medium-text); }
-.risk-finding-high { background-color: var(--risk-high-bg); border-left-color: var(--risk-high-text); }
+.risk-finding-passed {
+  background-color: var(--tone-neutral-bg);
+  border-left-color: var(--tone-neutral-border);
+}
+
+.risk-finding-low {
+  background-color: var(--tone-green-bg);
+  border-left-color: var(--tone-green-border);
+}
+
+.risk-finding-medium {
+  background-color: var(--tone-amber-bg);
+  border-left-color: var(--tone-amber-border);
+}
+
+.risk-finding-high {
+  background-color: var(--tone-rose-bg);
+  border-left-color: var(--tone-rose-border);
+}
 
 .risk-finding-unknown {
-  background-color: var(--risk-unknown-bg);
-  border-left-color: var(--risk-unknown-text);
+  background-color: var(--tone-unknown-bg);
+  border-left-color: var(--tone-unknown-border);
   border-left-style: dashed;
 }
 
 .risk-finding-evidence {
-  margin: 0.5rem 0 0;
-  font-size: 0.78rem;
+  margin: 0.6rem 0 0;
+  font-size: 0.8rem;
 }
 
 .risk-finding-evidence summary {
   cursor: pointer;
-  color: var(--color-muted);
+  color: inherit;
   font-weight: 600;
+  opacity: 0.85;
+}
+
+.risk-finding-evidence summary:hover {
+  opacity: 1;
 }
 
 .risk-finding-evidence p,
 .risk-finding-evidence ul {
-  margin: 0.35rem 0 0;
+  margin: 0.4rem 0 0;
 }
 
 .risk-finding-evidence ul {
@@ -338,71 +580,75 @@ input[type="text"]:focus {
 
 .risk-finding-evidence a {
   color: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
   word-break: break-all;
 }
 
 .risk-finding-evidence pre {
-  margin: 0.35rem 0 0;
-  padding: 0.6rem 0.75rem;
-  background-color: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  font-size: 0.78rem;
+  margin: 0.4rem 0 0;
+  padding: 0.7rem 0.8rem;
+  background-color: var(--color-surface);
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
+.evidence-holder {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed rgb(0 0 0 / 12%);
+}
+
 #worker-test-result {
-  margin-top: 0.5rem;
+  margin-top: 0.6rem;
 }
 
 #worker-test-summary p {
-  margin: 0.3rem 0;
+  margin: 0.35rem 0;
   font-size: 0.85rem;
 }
 
-.evidence-holder {
-  margin-top: 0.5rem;
-  padding-top: 0.5rem;
-  border-top: 1px dashed var(--color-border);
-}
-
-.result-card h3 {
-  margin-top: 0;
-  font-size: 1rem;
-}
-
-.result-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.result-card-header h3 {
-  margin-bottom: 0;
-}
-
-.result-card-header .secondary-button {
-  margin-top: 0;
-  padding: 0.4rem 0.75rem;
-  font-size: 0.85rem;
-  flex-shrink: 0;
-}
+/* --- Footer ---------------------------------------------------------- */
 
 .site-footer {
   padding: var(--spacing);
   text-align: center;
   font-size: 0.78rem;
-  color: var(--color-muted);
+  color: var(--color-slate);
 }
 
 .site-footer a {
-  color: var(--color-text);
+  color: var(--color-ink);
+  font-weight: 500;
+}
+
+/* --- Wider viewports --------------------------------------------------
+   Mobile-first: everything above works stacked at phone width. From here
+   up, the token-details table pairs two label/value columns per row
+   instead of one long stack, and a couple of type sizes step up. */
+
+@media (min-width: 480px) {
+  .result-grid {
+    grid-template-columns: auto 1fr auto 1fr;
+    column-gap: 1.5rem;
+  }
 }
 
 @media (min-width: 640px) {
   .brand h1 {
-    font-size: 1.75rem;
+    font-size: 1.625rem;
+  }
+
+  .intro-headline {
+    font-size: 1.625rem;
+  }
+
+  .risk-level-value {
+    font-size: 1.625rem;
   }
 }

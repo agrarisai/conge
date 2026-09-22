@@ -855,6 +855,7 @@ const scanTechDetailsEl = document.getElementById("scan-tech-details");
 const scanTechDetailsContentEl = document.getElementById("scan-tech-details-content");
 
 const riskLevelValueEl = document.getElementById("risk-level-value");
+const riskSummarySentenceEl = document.getElementById("risk-summary-sentence");
 const riskFindingsEl = document.getElementById("risk-findings");
 
 const resultAddressEl = document.getElementById("result-address");
@@ -880,6 +881,17 @@ const UNAVAILABLE = "Unavailable";
 // which it isn't.
 const GROUP_ORDER = ["high", "medium", "low", "passed", "unknown"];
 const GROUP_LABEL = { high: "High risk", medium: "Medium risk", low: "Low risk", passed: "Passed", unknown: "Info / unknown" };
+
+// A one-line, plain-language summary of the overall level — purely
+// presentational (like GROUP_LABEL above): it doesn't change what's
+// computed, only how the already-computed overallLevel reads at a
+// glance above the findings list.
+const SUMMARY_SENTENCE = {
+  Low: "No major red flags turned up in these automated checks.",
+  Medium: "A few things here are worth a closer look before you trust this token.",
+  High: "Multiple serious red flags — treat this token with real caution.",
+  "Insufficient data": "Not enough public data was available to reach a verdict.",
+};
 
 function groupKeyFor(finding) {
   if (finding.known === false) return "unknown";
@@ -1006,6 +1018,7 @@ function buildSellSimulationEvidence(simulation) {
 function renderRiskSummary(overallLevel, findings, sellSimulation) {
   riskLevelValueEl.textContent = overallLevel;
   riskLevelValueEl.className = `risk-level-value risk-level-${overallLevel.toLowerCase().replace(/\s+/g, "-")}`;
+  riskSummarySentenceEl.textContent = SUMMARY_SENTENCE[overallLevel] ?? "";
 
   riskFindingsEl.innerHTML = "";
   for (const groupKey of GROUP_ORDER) {

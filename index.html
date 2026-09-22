@@ -23,12 +23,19 @@
   <meta name="twitter:description" content="Conge is a read-only token risk scanner for EVM chains." />
   <meta name="twitter:image" content="https://agrarisai.github.io/conge/assets/social-preview-1200x630.png" />
 
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet"
+  />
+
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <header class="site-header">
     <div class="header-inner">
-      <img class="logo" src="assets/conge-mark.png" alt="" height="40" />
+      <img class="logo" src="assets/conge-mark.png" alt="" height="36" />
       <div class="brand">
         <h1>Conge</h1>
         <p class="tagline">TOKEN RISK SCANNER</p>
@@ -37,60 +44,78 @@
   </header>
 
   <main>
-    <section id="network-status" class="card" aria-labelledby="network-status-heading">
+    <div class="intro">
+      <p class="intro-headline">See a token's real risk before you trust it.</p>
+      <p class="intro-sub">
+        Conge is a free, read-only scanner for Robinhood Chain. It checks ownership, holder
+        concentration, and whether selling actually works — using only public on-chain and
+        block-explorer data, never your wallet.
+      </p>
+    </div>
+
+    <section id="network-status" class="card status-card" aria-labelledby="network-status-heading">
       <h2 id="network-status-heading">Network status</h2>
-      <dl class="status-grid">
-        <div class="status-row">
-          <dt>Chain</dt>
-          <dd id="network-name">—</dd>
-        </div>
-        <div class="status-row">
-          <dt>Chain ID</dt>
-          <dd id="network-chain-id">—</dd>
-        </div>
-        <div class="status-row">
-          <dt>Latest block</dt>
-          <dd id="network-block-number">—</dd>
-        </div>
-        <div class="status-row">
-          <dt>Data source</dt>
-          <dd id="network-source">—</dd>
-        </div>
-        <div class="status-row">
-          <dt>Status</dt>
-          <dd id="network-connection-status" class="status-pending">Connecting…</dd>
-        </div>
-      </dl>
-      <p id="network-error" class="error-message" hidden></p>
-      <details id="network-tech-details" class="tech-details" hidden>
-        <summary>Technical details</summary>
-        <pre id="network-tech-details-content"></pre>
-      </details>
-      <button id="network-retry" type="button" class="secondary-button" hidden>Retry connection</button>
-      <button id="worker-test-connection" type="button" class="secondary-button">Test Worker connection</button>
-      <div id="worker-test-result" hidden>
-        <div id="worker-test-summary"></div>
-        <details id="worker-test-tech-details" class="tech-details">
-          <summary>Technical details</summary>
-          <pre id="worker-test-tech-details-content"></pre>
-        </details>
+
+      <div class="status-strip">
+        <span id="network-connection-status" class="status-pending">Connecting…</span>
+        <span class="status-strip-sep" aria-hidden="true">·</span>
+        <span id="network-name">—</span>
+        <span class="status-strip-sep" aria-hidden="true">·</span>
+        <span class="status-strip-block">Block&nbsp;<span id="network-block-number">—</span></span>
       </div>
+
+      <p id="network-error" class="error-message" hidden></p>
+
+      <details class="status-more">
+        <summary>Connection details</summary>
+
+        <dl class="status-grid">
+          <div class="status-row">
+            <dt>Chain ID</dt>
+            <dd id="network-chain-id">—</dd>
+          </div>
+          <div class="status-row">
+            <dt>Data source</dt>
+            <dd id="network-source">—</dd>
+          </div>
+        </dl>
+
+        <details id="network-tech-details" class="tech-details" hidden>
+          <summary>Technical details</summary>
+          <pre id="network-tech-details-content"></pre>
+        </details>
+
+        <div class="status-actions">
+          <button id="network-retry" type="button" class="secondary-button" hidden>Retry connection</button>
+          <button id="worker-test-connection" type="button" class="secondary-button">Test Worker connection</button>
+        </div>
+
+        <div id="worker-test-result" hidden>
+          <div id="worker-test-summary"></div>
+          <details id="worker-test-tech-details" class="tech-details">
+            <summary>Technical details</summary>
+            <pre id="worker-test-tech-details-content"></pre>
+          </details>
+        </div>
+      </details>
     </section>
 
     <section id="token-scan" class="card" aria-labelledby="token-scan-heading">
       <h2 id="token-scan-heading">Scan a token</h2>
       <form id="scan-form" novalidate>
-        <label for="token-address">Contract address</label>
-        <input
-          id="token-address"
-          name="token-address"
-          type="text"
-          inputmode="text"
-          autocomplete="off"
-          spellcheck="false"
-          placeholder="0x..."
-          required
-        />
+        <div class="field">
+          <label for="token-address">Contract address</label>
+          <input
+            id="token-address"
+            name="token-address"
+            type="text"
+            inputmode="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="0x…"
+            required
+          />
+        </div>
         <p id="address-error" class="error-message" hidden></p>
         <button type="submit" class="primary-button" id="scan-button">Scan</button>
       </form>
@@ -102,14 +127,18 @@
         </div>
 
         <div id="risk-summary" class="risk-summary">
-          <div class="risk-level-row">
-            <span class="risk-level-label">Risk level</span>
-            <span id="risk-level-value" class="risk-level-value">—</span>
+          <div class="risk-headline">
+            <div class="risk-level-row">
+              <span class="risk-level-label">Risk level</span>
+              <span id="risk-level-value" class="risk-level-value">—</span>
+            </div>
+            <p id="risk-summary-sentence" class="risk-summary-sentence"></p>
           </div>
           <p class="risk-disclaimer">Automated checks can miss scams. Not financial advice. Verify independently.</p>
           <div id="risk-findings" class="risk-findings"></div>
         </div>
 
+        <h4 class="section-label">Token details</h4>
         <dl class="result-grid">
           <div class="result-row">
             <dt>Address</dt>
