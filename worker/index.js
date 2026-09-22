@@ -33,17 +33,44 @@ export const ALLOWED_METHODS = ["eth_chainId", "eth_blockNumber", "eth_call", "e
 
 const MAX_BATCH_SIZE = 10;
 const MAX_BODY_BYTES = 20 * 1024; // 20 KB
-const UPSTREAM_TIMEOUT_MS = 8000;
+export const UPSTREAM_TIMEOUT_MS = 8000;
 
 // The shared upstream RPC rate-limits (429) or is briefly overloaded (503)
-// under load — retrying a couple of times with backoff, all within the
-// existing 8s overall timeout, absorbs a transient hit instead of failing
-// the whole request outright. 3 total attempts, backoff starting at
-// ~300ms and doubling (300ms, then 600ms) comfortably fits inside 8s
-// alongside the fetches themselves.
-const RETRYABLE_UPSTREAM_STATUSES = new Set([429, 503]);
-const MAX_UPSTREAM_ATTEMPTS = 3;
-const RETRY_BASE_DELAY_MS = 300;
+// under load — retrying with backoff, all within the existing 8s overall
+// timeout, absorbs a transient hit instead of failing the whole request
+// outright. Up to 5 total attempts, backoff 400ms/800ms/1600ms/3200ms
+// (one delay between each pair of attempts) — the full backoff sequence
+// alone sums to 6s, so callUpstream also tracks a deadline (via
+// decideUpstreamRetry below) and skips a retry — rather than starting a
+// delay it can't finish — once there isn't enough of the 8s budget left,
+// capping attempts to whatever actually fits and saying so in the 502
+// body.
+export const RETRYABLE_UPSTREAM_STATUSES = new Set([429, 503]);
+export const MAX_UPSTREAM_ATTEMPTS = 5;
+export const RETRY_DELAYS_MS = [400, 800, 1600, 3200]; // delay before attempts 2, 3, 4, 5 respectively
+
+// Pure decision for whether callUpstream should retry after getting
+// `status` back on `attempt` (1-based), given `elapsedMs` already spent
+// since the request started. No network, no timers — fully
+// unit-testable, unlike callUpstream itself (which does the actual
+// waiting/fetching). Returns { retry: true, delayMs } or
+// { retry: false, reason: "not-retryable" | "exhausted-attempts" |
+// "time-budget" } — `reason` is only meaningful when `retry` is false and
+// `status` was itself retryable; callers use it to word the final 502
+// correctly (out of attempts vs. stopped early to respect the timeout).
+export function decideUpstreamRetry(status, attempt, elapsedMs) {
+  if (!RETRYABLE_UPSTREAM_STATUSES.has(status)) {
+    return { retry: false, reason: "not-retryable" };
+  }
+  if (attempt >= MAX_UPSTREAM_ATTEMPTS) {
+    return { retry: false, reason: "exhausted-attempts" };
+  }
+  const nextDelay = RETRY_DELAYS_MS[attempt - 1];
+  if (elapsedMs + nextDelay >= UPSTREAM_TIMEOUT_MS) {
+    return { retry: false, reason: "time-budget" };
+  }
+  return { retry: true, delayMs: nextDelay };
+}
 
 // Resolves after `ms`, or rejects with the same AbortError shape `fetch`
 // itself would produce if `signal` aborts first — so a backoff delay never
@@ -217,15 +244,19 @@ function jsonResponse(body, status, extraHeaders) {
 // --- Upstream call (network — not covered by unit tests) -----------------
 
 // On a 429/503 from the upstream RPC, retries up to MAX_UPSTREAM_ATTEMPTS
-// times with exponential backoff before giving up — see the constants
-// above. Every other outcome (success, a different HTTP error, a network
-// failure, or the overall timeout firing) returns immediately, exactly as
-// before. A rate-limited failure that survives every retry is reported
-// with `kind: "upstream-rate-limited"` so callers (and ultimately the UI)
-// can show a specific "busy, try again" message instead of a generic one.
+// times with the RETRY_DELAYS_MS backoff before giving up — see the
+// constants above. Every other outcome (success, a different HTTP error,
+// a network failure, or the overall timeout firing) returns immediately,
+// exactly as before. A rate-limited failure that survives every retry —
+// or that stops early because the 8s budget wouldn't cover another delay
+// — is reported with `kind: "upstream-rate-limited"` so callers (and
+// ultimately the UI) can show a specific "busy, try again" message
+// instead of a generic one; the detail text says explicitly which case
+// it was.
 async function callUpstream(rpcRequests) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  const startedAt = Date.now();
   const outgoingBody = rpcRequests.length === 1 ? rpcRequests[0] : rpcRequests;
 
   try {
@@ -246,14 +277,26 @@ async function callUpstream(rpcRequests) {
         return { ok: false, detail };
       }
 
-      const isRetryableStatus = RETRYABLE_UPSTREAM_STATUSES.has(response.status);
-      if (isRetryableStatus && attempt < MAX_UPSTREAM_ATTEMPTS) {
+      const decision = decideUpstreamRetry(response.status, attempt, Date.now() - startedAt);
+
+      if (decision.retry) {
         try {
-          await delay(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), controller.signal);
+          await delay(decision.delayMs, controller.signal);
         } catch (error) {
           return { ok: false, detail: `Upstream did not respond within ${UPSTREAM_TIMEOUT_MS / 1000}s` };
         }
         continue;
+      }
+
+      if (RETRYABLE_UPSTREAM_STATUSES.has(response.status)) {
+        // Give up either because every attempt is used up, or because
+        // there isn't enough of the 8s budget left for another delay —
+        // the detail text says which.
+        const detail =
+          decision.reason === "time-budget"
+            ? `Upstream is rate limited (HTTP ${response.status}) — stopped after ${attempt} of ${MAX_UPSTREAM_ATTEMPTS} attempts to stay within the ${UPSTREAM_TIMEOUT_MS / 1000}s timeout`
+            : `Upstream is rate limited (HTTP ${response.status}) after ${attempt} attempts`;
+        return { ok: false, detail, kind: "upstream-rate-limited" };
       }
 
       const text = await response.text();
@@ -261,22 +304,7 @@ async function callUpstream(rpcRequests) {
       try {
         body = JSON.parse(text);
       } catch {
-        if (isRetryableStatus) {
-          return {
-            ok: false,
-            detail: `Upstream is rate limited (HTTP ${response.status}) after ${attempt} attempts`,
-            kind: "upstream-rate-limited",
-          };
-        }
         return { ok: false, detail: `Upstream returned a non-JSON response (HTTP ${response.status})` };
-      }
-
-      if (isRetryableStatus) {
-        return {
-          ok: false,
-          detail: `Upstream is rate limited (HTTP ${response.status}) after ${attempt} attempts`,
-          kind: "upstream-rate-limited",
-        };
       }
 
       if (!response.ok) {
