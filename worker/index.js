@@ -35,6 +35,33 @@ const MAX_BATCH_SIZE = 10;
 const MAX_BODY_BYTES = 20 * 1024; // 20 KB
 const UPSTREAM_TIMEOUT_MS = 8000;
 
+// The shared upstream RPC rate-limits (429) or is briefly overloaded (503)
+// under load — retrying a couple of times with backoff, all within the
+// existing 8s overall timeout, absorbs a transient hit instead of failing
+// the whole request outright. 3 total attempts, backoff starting at
+// ~300ms and doubling (300ms, then 600ms) comfortably fits inside 8s
+// alongside the fetches themselves.
+const RETRYABLE_UPSTREAM_STATUSES = new Set([429, 503]);
+const MAX_UPSTREAM_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 300;
+
+// Resolves after `ms`, or rejects with the same AbortError shape `fetch`
+// itself would produce if `signal` aborts first — so a backoff delay never
+// lets the overall UPSTREAM_TIMEOUT_MS budget run over.
+function delay(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(resolve, ms);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timeoutId);
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      },
+      { once: true },
+    );
+  });
+}
+
 const BLOCK_TAG_LATEST = "latest";
 const HEX_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HEX_DATA = /^0x([0-9a-fA-F]{2})*$/;
@@ -189,38 +216,75 @@ function jsonResponse(body, status, extraHeaders) {
 
 // --- Upstream call (network — not covered by unit tests) -----------------
 
+// On a 429/503 from the upstream RPC, retries up to MAX_UPSTREAM_ATTEMPTS
+// times with exponential backoff before giving up — see the constants
+// above. Every other outcome (success, a different HTTP error, a network
+// failure, or the overall timeout firing) returns immediately, exactly as
+// before. A rate-limited failure that survives every retry is reported
+// with `kind: "upstream-rate-limited"` so callers (and ultimately the UI)
+// can show a specific "busy, try again" message instead of a generic one.
 async function callUpstream(rpcRequests) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
   const outgoingBody = rpcRequests.length === 1 ? rpcRequests[0] : rpcRequests;
 
   try {
-    const response = await fetch(UPSTREAM_RPC, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(outgoingBody),
-      signal: controller.signal,
-    });
+    for (let attempt = 1; attempt <= MAX_UPSTREAM_ATTEMPTS; attempt++) {
+      let response;
+      try {
+        response = await fetch(UPSTREAM_RPC, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(outgoingBody),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        const detail =
+          error.name === "AbortError"
+            ? `Upstream did not respond within ${UPSTREAM_TIMEOUT_MS / 1000}s`
+            : `Upstream request failed: ${error.message}`;
+        return { ok: false, detail };
+      }
 
-    const text = await response.text();
-    let body;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      return { ok: false, detail: `Upstream returned a non-JSON response (HTTP ${response.status})` };
+      const isRetryableStatus = RETRYABLE_UPSTREAM_STATUSES.has(response.status);
+      if (isRetryableStatus && attempt < MAX_UPSTREAM_ATTEMPTS) {
+        try {
+          await delay(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), controller.signal);
+        } catch (error) {
+          return { ok: false, detail: `Upstream did not respond within ${UPSTREAM_TIMEOUT_MS / 1000}s` };
+        }
+        continue;
+      }
+
+      const text = await response.text();
+      let body;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        if (isRetryableStatus) {
+          return {
+            ok: false,
+            detail: `Upstream is rate limited (HTTP ${response.status}) after ${attempt} attempts`,
+            kind: "upstream-rate-limited",
+          };
+        }
+        return { ok: false, detail: `Upstream returned a non-JSON response (HTTP ${response.status})` };
+      }
+
+      if (isRetryableStatus) {
+        return {
+          ok: false,
+          detail: `Upstream is rate limited (HTTP ${response.status}) after ${attempt} attempts`,
+          kind: "upstream-rate-limited",
+        };
+      }
+
+      if (!response.ok) {
+        return { ok: false, detail: `Upstream returned HTTP ${response.status}` };
+      }
+
+      return { ok: true, body };
     }
-
-    if (!response.ok) {
-      return { ok: false, detail: `Upstream returned HTTP ${response.status}` };
-    }
-
-    return { ok: true, body };
-  } catch (error) {
-    const detail =
-      error.name === "AbortError"
-        ? `Upstream did not respond within ${UPSTREAM_TIMEOUT_MS / 1000}s`
-        : `Upstream request failed: ${error.message}`;
-    return { ok: false, detail };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -273,8 +337,13 @@ async function handleRpc(request, origin) {
     if (!upstream.ok) {
       // A single failed upstream call fails the whole HTTP response, even
       // inside a batch — the upstream is unreachable/erroring, not any one
-      // request in particular.
-      return jsonResponse({ error: "Upstream RPC request failed", detail: upstream.detail }, 502, cors);
+      // request in particular. `kind` is only present for a rate-limited
+      // failure that survived every retry (see callUpstream) — callers use
+      // it to show a specific "busy, try again" message instead of a
+      // generic connectivity error.
+      const body = { error: "Upstream RPC request failed", detail: upstream.detail };
+      if (upstream.kind) body.kind = upstream.kind;
+      return jsonResponse(body, 502, cors);
     }
     const upstreamResults = Array.isArray(upstream.body) ? upstream.body : [upstream.body];
     for (const r of upstreamResults) {

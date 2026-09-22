@@ -531,8 +531,13 @@ above for why that endpoint can fail from some networks). It:
 - validates addresses/call data as hex before forwarding;
 - only accepts requests from `https://agrarisai.github.io` (no wildcard
   CORS);
+- **retries a rate-limited or overloaded upstream call** (HTTP `429`/`503`
+  from `rpc.mainnet.chain.robinhood.com` — the RPC is shared, so this
+  happens under load) up to 3 times total, with exponential backoff
+  starting around 300ms, all within the existing 8s overall timeout — see
+  [Rate limiting](#rate-limiting) below;
 - times out upstream calls after 8s and reports `502` with a real reason
-  if the upstream fails, rather than hanging;
+  if the upstream still fails after retries, rather than hanging;
 - exposes `GET /health` as a one-tap, no-CORS diagnostic you can open
   directly in a phone browser to check whether the upstream RPC is
   reachable right now;
@@ -593,7 +598,11 @@ works fine in a browser tab, use these in order:
      request, not a CORS problem.
    - `upstream-unreachable` — the Worker itself is fine and accepted the
      request, but its own call to `rpc.mainnet.chain.robinhood.com`
-     failed (`502`).
+     failed (`502`) for a reason other than rate limiting.
+   - `upstream-rate-limited` — the Worker accepted the request and reached
+     the upstream RPC, but the upstream rate-limited it (`502`) even after
+     the Worker's own retries — see [Rate limiting](#rate-limiting) below.
+     Not a CORS problem, and usually resolves itself on retry.
    - `json-rpc-error` — the Worker accepted the request and got a real
      answer from upstream, but that specific call reverted or otherwise
      errored (e.g. a contract with no `owner()` function) — not a
@@ -638,6 +647,61 @@ explanations are outside this file:
   browser error, HTTP status, and response body directly, rather than a
   bare "could not be reached" — please re-test on the live site and share
   what they show if the issue isn't resolved by a redeploy.
+
+**Update — root cause found.** Exactly this diagnostic path (the "Test
+Worker connection" self-test's Technical details) identified the real
+cause on the live site: `eth_chainId` succeeded, but an `eth_call` with a
+`"from"` field came back `502` with detail `"Upstream returned HTTP 429"`
+— the shared upstream RPC rate-limiting the Worker, not a CORS or
+validation problem at all. See [Rate limiting](#rate-limiting) below for
+the fix. This is a good example of the diagnostics above doing their job:
+the `kind` classification (`upstream-unreachable` at the time, now further
+split out as `upstream-rate-limited`) pointed straight at the real cause
+instead of leaving it as an unexplained "could not be reached".
+
+### Rate limiting
+
+`rpc.mainnet.chain.robinhood.com` is a shared, third-party endpoint and
+can rate-limit (`429`) or briefly overload (`503`) under load — the
+Worker proxies to it, so a Worker call can fail for this reason even
+though nothing about CORS, origin, or validation is wrong. Two layers of
+resilience handle this, both within the project's existing constraints
+(no new dependencies, no secrets/state):
+
+- **In the Worker** (`callUpstream` in `worker/index.js`): a `429`/`503`
+  from the upstream is retried up to 3 times total, with exponential
+  backoff starting around 300ms (300ms, then 600ms between attempts) —
+  all within the existing 8s overall `UPSTREAM_TIMEOUT_MS` budget, so a
+  request never hangs longer than it already could. If every attempt is
+  still rate-limited, the Worker returns `502` with a body that clearly
+  says so: `{"error": "Upstream RPC request failed", "detail": "Upstream
+  is rate limited (HTTP 429) after 3 attempts", "kind":
+  "upstream-rate-limited"}` — that `kind` field is what lets `app.js` (and
+  the Technical details panels) show a specific "the RPC is busy, please
+  try again" message instead of a generic connectivity error. Any other
+  upstream HTTP error is *not* retried and fails immediately, exactly as
+  before.
+- **In `app.js`**, for the owner check and the sell-simulation honeypot
+  check specifically — the two checks that can make several *sequential*
+  Worker batches for one scan (`callWorkerChunked`): a small delay
+  (`CHUNK_DELAY_MS`, 250ms) is inserted *between* sequential batches
+  (never before the first one) to spread the load out and make hitting
+  the rate limit less likely in the first place, and if a batch still
+  comes back with `kind: "upstream-rate-limited"` after the Worker's own
+  retries, that one batch is retried once more (after
+  `RATE_LIMIT_RETRY_DELAY_MS`, 600ms) before the check gives up and shows
+  Unknown. This is what keeps a normal scan from failing outright over
+  what's usually a brief, transient rate limit — the network status
+  probe (a single, simple batch) doesn't need this since it isn't making
+  sequential batches.
+
+`worker/tests/worker.test.js` covers this against the real
+`fetch(request)` handler: a `429` followed by a success (confirms the
+retry happens and the Worker still returns `200`), a `429` on every
+attempt (confirms it gives up after exactly 3 tries and returns the
+`upstream-rate-limited`-labeled `502`), a `503` retried the same way as
+`429`, and a non-retryable error like `500` failing immediately with no
+retry — runnable with `node --test worker/tests/worker.test.js`.
 
 ## Security notes
 
