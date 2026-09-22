@@ -435,6 +435,17 @@ test("scoreOwnerStatus", () => {
   assert.match(scoreOwnerStatus("0x1111111111111111111111111111111111111a").title, /Owned by/);
 });
 
+test("scoreOwnerStatus: carries diagnostics through on the unknown branch for the UI's Technical details, never affecting severity", () => {
+  const diagnostics = [{ label: "Worker — eth_call owner()", url: "https://conge-rpc.agrarisai.workers.dev", kind: "network-or-cors", errorName: "TypeError", errorMessage: "Failed to fetch" }];
+  const f = scoreOwnerStatus(null, diagnostics);
+  assert.equal(f.known, false);
+  assert.equal(f.severity, SEVERITY.INFO);
+  assert.deepEqual(f.diagnostics, diagnostics);
+
+  // A resolved owner never needs diagnostics attached.
+  assert.equal(scoreOwnerStatus(ZERO_ADDRESS, diagnostics).diagnostics, null);
+});
+
 // --- ABI helpers (hand-rolled, no dependency) ---------------------------
 
 const HOLDER = "0x111111111111111111111111111111111111111a";
@@ -448,6 +459,7 @@ test("SELECTOR matches the well-known 4-byte selectors given in the spec", () =>
     owner: "0x8da5cb5b",
     token0: "0x0dfe1681",
     token1: "0xd21220a7",
+    balanceOf: "0x70a08231",
   });
 });
 
@@ -532,6 +544,15 @@ test("scoreSellSimulation: Worker down -> Unknown, never counted as a pass", () 
   assert.equal(f.known, false);
   assert.equal(f.severity, SEVERITY.INFO);
   assert.match(f.title, /unknown/i);
+});
+
+test("scoreSellSimulation: Worker down carries the raw diagnostics through for the UI's Technical details", () => {
+  const diagnostics = [
+    { label: "Worker — eth_call token0()/token1() (pool detection)", url: "https://conge-rpc.agrarisai.workers.dev", kind: "timeout", errorName: "AbortError", errorMessage: "The operation was aborted." },
+  ];
+  const f = scoreSellSimulation({ status: "unreachable", diagnostics });
+  assert.equal(f.known, false);
+  assert.deepEqual(f.diagnostics, diagnostics);
 });
 
 test("scoreSellSimulation: undefined simulation (facts.sellSimulation never set) behaves like Worker down", () => {
