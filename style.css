@@ -92,7 +92,6 @@ summary:focus-visible {
 /* --- Header ----------------------------------------------------------- */
 
 .site-header {
-  position: relative;
   padding: 1.5rem var(--spacing) 1.125rem;
   border-bottom: 1px solid var(--color-border);
 }
@@ -141,15 +140,16 @@ summary:focus-visible {
   vertical-align: middle;
 }
 
-/* --- Nav toggle (hamburger) --------------------------------------------
-   Sits on the right of the header, next to the logo/wordmark on the
-   left. The three bars morph into a close (×) via CSS transforms driven
-   off the button's own aria-expanded state, so the icon swap and the
-   a11y state can never drift out of sync. */
+/* --- Nav toggle / close buttons -----------------------------------------
+   Square icon buttons of matching visual weight: .nav-toggle sits on the
+   right of the header, next to the logo/wordmark, and opens the panel
+   below; .nav-close is its counterpart inside the panel's own header
+   row. Both share the same bar-built icon markup (.nav-toggle-icon) so
+   the hamburger, its open (×) state, and the panel's static × are all
+   drawn with the same two CSS bars rather than three different icons. */
 
-.nav-toggle {
-  flex-shrink: 0;
-  margin-left: auto;
+.nav-toggle,
+.nav-close {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -162,7 +162,13 @@ summary:focus-visible {
   cursor: pointer;
 }
 
-.nav-toggle:hover {
+.nav-toggle {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.nav-toggle:hover,
+.nav-close:hover {
   border-color: var(--color-border-strong);
 }
 
@@ -196,80 +202,129 @@ summary:focus-visible {
   top: 6px;
 }
 
-.nav-toggle[aria-expanded="true"] .nav-toggle-icon {
+.nav-toggle[aria-expanded="true"] .nav-toggle-icon,
+.nav-close .nav-toggle-icon {
   background-color: transparent;
 }
 
-.nav-toggle[aria-expanded="true"] .nav-toggle-icon::before {
+.nav-toggle[aria-expanded="true"] .nav-toggle-icon::before,
+.nav-close .nav-toggle-icon::before {
   top: 0;
   transform: rotate(45deg);
 }
 
-.nav-toggle[aria-expanded="true"] .nav-toggle-icon::after {
+.nav-toggle[aria-expanded="true"] .nav-toggle-icon::after,
+.nav-close .nav-toggle-icon::after {
   top: 0;
   transform: rotate(-45deg);
 }
 
-/* --- Nav panel ----------------------------------------------------------
-   A dropdown anchored under the toggle button, styled like the rest of
-   the site's surfaces (bordered card, no shadow) rather than a generic
-   browser-default menu. */
+/* --- Nav overlay + panel -------------------------------------------------
+   A full-height panel that slides in from the right over a dimmed
+   overlay, in place of a compact dropdown — same ivory/ink/accent
+   tokens as the rest of the site, not a generic drawer component. */
 
-.site-nav {
-  position: absolute;
-  top: 100%;
-  right: var(--spacing);
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-  min-width: 200px;
-  margin-top: 0.5rem;
-  padding: 0.4rem;
-  background-color: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+.nav-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background-color: rgba(15, 17, 21, 0.45);
   opacity: 0;
-  transform: translateY(-6px);
-  transition: opacity 0.16s ease, transform 0.16s ease;
+  transition: opacity 0.22s ease;
 }
 
-.site-nav.is-open {
+.nav-overlay.is-open {
   opacity: 1;
-  transform: translateY(0);
 }
 
-.site-nav[hidden] {
+.nav-overlay[hidden] {
   display: none;
 }
 
-.site-nav a {
-  padding: 0.6rem 0.7rem;
-  border-radius: var(--radius-sm);
-  font-size: 0.9rem;
+.nav-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 360px;
+  height: 100vh;
+  height: 100dvh;
+  background-color: var(--color-bg);
+  border-left: 1px solid var(--color-border);
+  overflow-y: auto;
+  transform: translateX(100%);
+  transition: transform 0.22s ease;
+}
+
+.nav-panel.is-open {
+  transform: translateX(0);
+}
+
+.nav-panel[hidden] {
+  display: none;
+}
+
+.nav-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  padding: 1.25rem var(--spacing) 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.nav-panel-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.nav-panel .site-nav {
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--spacing);
+}
+
+.nav-panel .site-nav a {
+  padding: 1.1rem 0.1rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 1.05rem;
   font-weight: 500;
-  color: var(--color-slate);
+  color: var(--color-ink);
   text-decoration: none;
 }
 
-.site-nav a:hover {
-  color: var(--color-ink);
-  background-color: var(--color-bg);
+.nav-panel .site-nav a:last-child {
+  border-bottom: none;
 }
 
-.site-nav a[aria-current="page"] {
-  color: var(--color-ink);
+.nav-panel .site-nav a:hover {
+  color: var(--color-accent-text);
+}
+
+/* Deepened accent shade, not the raw #0B84F3 brand blue — same reasoning
+   as --color-accent-text everywhere else it's used for small text: the
+   raw accent falls under 4.5:1 as text on ivory/white. */
+.nav-panel .site-nav a[aria-current="page"] {
+  color: var(--color-accent-text);
   font-weight: 600;
-  background-color: var(--color-bg);
-  border-left: 3px solid var(--color-accent);
-  padding-left: calc(0.7rem - 3px);
+}
+
+body.nav-open {
+  overflow: hidden;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .nav-toggle-icon,
   .nav-toggle-icon::before,
   .nav-toggle-icon::after,
-  .site-nav {
+  .nav-overlay,
+  .nav-panel {
     transition: none;
   }
 }
