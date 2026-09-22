@@ -692,13 +692,23 @@ export function scoreSellSimulation(simulation) {
   const status = simulation?.status ?? "unreachable";
 
   if (status === "unreachable") {
+    const diagnostics = simulation?.diagnostics ?? null;
+    // The shared public RPC's rate limit is an accepted, expected
+    // limitation (see README's "Known limitations") — not the same kind
+    // of "something is actually broken" situation as the Worker being
+    // fully unreachable, a network/CORS failure, etc. It gets its own
+    // calmer wording precisely so it doesn't read as an error to chase;
+    // every other "unreachable" cause keeps the existing message.
+    const isRateLimited = Array.isArray(diagnostics) && diagnostics.some((d) => d?.kind === "upstream-rate-limited");
     return finding({
       id: "sell-simulation",
       known: false,
       severity: SEVERITY.INFO,
-      title: "Sell simulation unknown",
-      detail: "The Worker/RPC could not be reached to simulate a transfer, so selling could not be tested.",
-      diagnostics: simulation?.diagnostics ?? null,
+      title: isRateLimited ? "Sell simulation could not complete" : "Sell simulation unknown",
+      detail: isRateLimited
+        ? "The shared public RPC is rate limited right now. This is a known limitation, not an error in Conge. Try scanning again in a minute."
+        : "The Worker/RPC could not be reached to simulate a transfer, so selling could not be tested.",
+      diagnostics,
     });
   }
 
