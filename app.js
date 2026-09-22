@@ -847,6 +847,7 @@ const scanForm = document.getElementById("scan-form");
 const tokenAddressInput = document.getElementById("token-address");
 const addressErrorEl = document.getElementById("address-error");
 const scanButton = document.getElementById("scan-button");
+const rescanButton = document.getElementById("rescan-button");
 const scanErrorEl = document.getElementById("scan-error");
 const scanResultEl = document.getElementById("scan-result");
 const scanResultTitleEl = document.getElementById("scan-result-title");
@@ -1066,6 +1067,7 @@ async function scanToken(rawAddress) {
 
   scanButton.disabled = true;
   scanButton.textContent = "Scanning…";
+  rescanButton.disabled = true;
 
   try {
     // fetchOwnerViaWorker is deliberately NOT in this Promise.all — see
@@ -1266,12 +1268,23 @@ async function scanToken(rawAddress) {
   } finally {
     scanButton.disabled = false;
     scanButton.textContent = "Scan";
+    rescanButton.disabled = false;
   }
 }
 
 scanForm.addEventListener("submit", (event) => {
   event.preventDefault();
   scanToken(tokenAddressInput.value);
+});
+
+// Re-runs the scan for the address already shown on the result card —
+// no retyping needed. Only visible/clickable once a scan has actually
+// rendered a result (rescan-button lives inside #scan-result, which
+// resetScanUI hides at the start of every scan, including this one).
+rescanButton.addEventListener("click", () => {
+  if (lastScannedTokenAddress) {
+    scanToken(lastScannedTokenAddress);
+  }
 });
 
 // --- Init ---------------------------------------------------------------

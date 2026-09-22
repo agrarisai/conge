@@ -555,6 +555,46 @@ test("scoreSellSimulation: Worker down carries the raw diagnostics through for t
   assert.deepEqual(f.diagnostics, diagnostics);
 });
 
+test("scoreSellSimulation: unreachable specifically because of rate limiting gets its own calmer, distinct message", () => {
+  const diagnostics = [
+    {
+      label: "Worker — eth_call transfer() simulation",
+      url: "https://conge-rpc.agrarisai.workers.dev",
+      kind: "upstream-rate-limited",
+      errorName: "HTTPError",
+      errorMessage: "Upstream is rate limited (HTTP 429) after 5 attempts",
+    },
+  ];
+  const f = scoreSellSimulation({ status: "unreachable", diagnostics });
+  assert.equal(f.known, false);
+  assert.equal(f.severity, SEVERITY.INFO);
+  assert.equal(f.title, "Sell simulation could not complete");
+  assert.equal(
+    f.detail,
+    "The shared public RPC is rate limited right now. This is a known limitation, not an error in Conge. Try scanning again in a minute.",
+  );
+  assert.deepEqual(f.diagnostics, diagnostics);
+});
+
+test("scoreSellSimulation: a non-rate-limited unreachable cause keeps the existing generic message, not the rate-limited one", () => {
+  const diagnostics = [
+    { label: "Worker — eth_call owner()", url: "https://conge-rpc.agrarisai.workers.dev", kind: "network-or-cors", errorName: "TypeError", errorMessage: "Failed to fetch" },
+  ];
+  const f = scoreSellSimulation({ status: "unreachable", diagnostics });
+  assert.equal(f.title, "Sell simulation unknown");
+  assert.doesNotMatch(f.detail, /rate limited/i);
+});
+
+test("scoreSellSimulation: 'no pool found' and 'no eligible holder' keep their own distinct messages, never the rate-limited one", () => {
+  const noPool = scoreSellSimulation({ status: "no-pool", pools: [], holderAttempts: [] });
+  assert.match(noPool.title, /no liquidity pool/i);
+  assert.doesNotMatch(noPool.detail, /rate limited/i);
+
+  const noHolder = scoreSellSimulation({ status: "no-holder", pools: [{ address: POOL, token0: TOKEN, token1: OTHER_TOKEN }], holderAttempts: [] });
+  assert.match(noHolder.title, /no eligible holder/i);
+  assert.doesNotMatch(noHolder.detail, /rate limited/i);
+});
+
 test("scoreSellSimulation: undefined simulation (facts.sellSimulation never set) behaves like Worker down", () => {
   const f = scoreSellSimulation(undefined);
   assert.equal(f.known, false);

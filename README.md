@@ -66,7 +66,11 @@ headers for this site's origin.
   real error for each request that was made. The **Owner status** and
   **Sell-simulation honeypot check** findings each get their own
   collapsible **Technical details** too, specifically when their own
-  Worker call failed — see [below](#sell-simulation-honeypot-check).
+  Worker call failed — see [below](#sell-simulation-honeypot-check). A
+  small **Rescan** button on the result card re-runs the scan for the
+  same address — handy since a check that came back Unknown due to rate
+  limiting (see [Known limitations](#known-limitations)) often succeeds
+  on a retry a little later, without retyping the address.
 - **Risk Score v1** — every scan of a contract also runs a transparent,
   rule-based risk check (see below) and shows a summary card — overall
   level, then findings grouped by severity — above the token details.
@@ -199,8 +203,18 @@ It runs three steps, entirely through the [Worker](#worker) RPC proxy:
   trap.
 - No pool found among the top holders → **Info/Unknown**, "No liquidity
   pool found among top holders, sell could not be simulated".
-- The Worker or the upstream RPC is unreachable → **Info/Unknown**,
-  never counted as a pass.
+- The Worker or the upstream RPC is unreachable → **Info/Unknown**, "Sell
+  simulation unknown", never counted as a pass.
+- Specifically **rate-limited** by the shared upstream RPC (`kind:
+  "upstream-rate-limited"`, even after every retry — see
+  [Rate limiting](#rate-limiting) and
+  [Known limitations](#known-limitations) below) → **Info/Unknown**, but
+  with its own calmer, distinct wording — "Sell simulation could not
+  complete — the shared public RPC is rate limited right now. This is a
+  known limitation, not an error in Conge. Try scanning again in a
+  minute." — rather than the generic "could not be reached" message
+  above, so it reads as an expected, retryable condition rather than a
+  bug to chase. Every other "Unknown" reason keeps its own message.
 
 Every finding shows a **"How this was checked"** collapsible: which
 holder(s) were used, which pool addresses were detected, and which calls
@@ -213,8 +227,8 @@ Technical details panels: which call it was (`owner()` / `token0()` /
 browser error name/message, the HTTP status (if any), the first 300
 characters of the response body, and a `kind` classification
 (`network-or-cors`, `timeout`, `origin-rejected`, `validation-rejected`,
-`upstream-unreachable`, or `json-rpc-error` — see
-[Worker](#worker) below for what each one means). This applies to the
+`upstream-unreachable`, `upstream-rate-limited`, or `json-rpc-error` —
+see [Worker](#worker) below for what each one means). This applies to the
 **Owner status** finding too, for the same reason.
 
 **Limits, by design:**
@@ -745,6 +759,28 @@ observed delays between calls matching `CHUNK_DELAY_MS`,
 exactly; a second scenario with the rate limit never lifting confirmed
 both checks end in an honest Unknown (with real diagnostics) rather than
 hanging or retrying forever.
+
+## Known limitations
+
+- **The shared public RPC's rate limit can leave a check Unknown.**
+  `rpc.mainnet.chain.robinhood.com` is a shared, third-party endpoint with
+  a tight rate limit (see [Rate limiting](#rate-limiting) above). Conge
+  retries a rate-limited call several times, at both the Worker level and
+  the app level, but that's a mitigation, not a guarantee — under load,
+  the **sell-simulation honeypot check** (and, rarely, the **owner
+  check**) may still come back "Unknown" specifically because of this.
+  This is expected, not a bug: the finding says so directly ("Sell
+  simulation could not complete — the shared public RPC is rate limited
+  right now. This is a known limitation, not an error in Conge.") rather
+  than reading like a generic error, and the check can simply be retried
+  — click **Rescan** on the result card (or scan again) a little later
+  and it usually goes through.
+- See also each Risk Score v1 check's own "Limits, by design" notes
+  above, and the [sell-simulation honeypot check](#sell-simulation-honeypot-check)'s
+  own limits (can't measure buy/sell tax, can't see router-swap-only
+  rules, time/amount-based traps can slip through) — those are limits of
+  what the check can detect even when it *does* complete, separate from
+  this one about whether it completes at all.
 
 ## Security notes
 
