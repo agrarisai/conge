@@ -510,8 +510,11 @@ them, so none of its DOM lookups apply). Like every page, they do load
   it ever asks for a wallet or key (no), why a scan sometimes says
   Unknown (the shared RPC's rate limit — see
   [Known limitations](#known-limitations)), Robinhood affiliation (none),
-  whether the code is open source (yes, linked), and how risk level is
-  decided (linked to `how-it-works.html`).
+  whether the code is open source (no — the repository is private, so
+  this answers honestly rather than linking to it, and points to the
+  browser's own network tab as the alternative way to verify what the
+  site actually sends), and how risk level is decided (linked to
+  `how-it-works.html`).
 - **`disclaimer.html`** — the short footer disclaimer, expanded: read-only/no
   custody, not financial advice, automated checks can miss scams, not
   affiliated with Robinhood Markets Inc., verify independently. It says
@@ -545,8 +548,10 @@ All of this lives in one shared `nav.js` (vanilla JS, no dependencies),
 loaded identically by every page so the behavior can't drift between
 them — same pattern as the header markup itself, which is copy-pasted
 identically rather than templated, since there's no build step to share
-it otherwise. The footer is a separate shared block, four columns
-(Brand, Product, Resources, Legal) plus a small-print line with the
+it otherwise. The footer is a separate shared block, three columns
+(Brand, Product, Legal — there's no repo/issue-tracker link anywhere on
+the site, footer included: the repository is private) plus a small-print
+line with the
 current year (set by a couple of inline lines of vanilla JS on each page
 — no build step, and it degrades to whatever static year is already in
 the markup if that JS doesn't run) and the Robinhood-affiliation
