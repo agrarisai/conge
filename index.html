@@ -137,13 +137,19 @@
           />
         </div>
         <p id="address-error" class="error-message" hidden></p>
-        <button type="submit" class="primary-button" id="scan-button">Scan</button>
+        <button type="submit" class="primary-button" id="scan-button">
+          <span class="button-busy-dot" aria-hidden="true"></span>
+          <span id="scan-button-label">Scan</span>
+        </button>
       </form>
 
       <div id="scan-result" class="result-card" hidden>
         <div class="result-card-header">
           <h3 id="scan-result-title">Token</h3>
-          <button id="rescan-button" type="button" class="secondary-button">Rescan</button>
+          <button id="rescan-button" type="button" class="secondary-button">
+            <span class="button-busy-dot" aria-hidden="true"></span>
+            <span id="rescan-button-label">Rescan</span>
+          </button>
         </div>
 
         <div id="risk-summary" class="risk-summary">
