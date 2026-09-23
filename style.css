@@ -666,6 +666,10 @@ input[type="text"]::placeholder {
 
 .primary-button,
 .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
   border: none;
   border-radius: var(--radius-sm);
   padding: 0.7rem 1.1rem;
@@ -674,6 +678,32 @@ input[type="text"]::placeholder {
   font-weight: 600;
   cursor: pointer;
   transition: filter 0.1s ease, background-color 0.1s ease;
+}
+
+/* The same on-brand busy cue as a pending finding row's marker dot (see
+   .risk-finding-pending), shown only while the button is disabled for a
+   scan in flight — never a generic spinner. Pure CSS: nothing in app.js
+   toggles this directly, it just follows :disabled. */
+.button-busy-dot {
+  display: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background-color: currentColor;
+  flex-shrink: 0;
+}
+
+.primary-button:disabled .button-busy-dot,
+.secondary-button:disabled .button-busy-dot {
+  display: block;
+  animation: finding-pulse 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primary-button:disabled .button-busy-dot,
+  .secondary-button:disabled .button-busy-dot {
+    animation: none;
+  }
 }
 
 .primary-button {
@@ -852,6 +882,21 @@ input[type="text"]::placeholder {
   opacity: 0;
 }
 
+/* The gauge's own "still scanning" indicator: the needle sweeps across
+   the full dial instead of pointing anywhere, since neither owner nor
+   sell-simulation (both level-affecting) has resolved yet. transition
+   and animation never fight — setGaugeNeedle always removes this class
+   before setting a real angle, so settling takes over wherever the
+   sweep left off (see app.js). */
+.gauge-needle-rotor.gauge-needle-pending {
+  animation: gauge-sweep 1.8s ease-in-out infinite;
+}
+
+@keyframes gauge-sweep {
+  0%, 100% { transform: rotate(-60deg); }
+  50% { transform: rotate(60deg); }
+}
+
 .gauge-needle {
   stroke: var(--color-accent);
   stroke-width: 3;
@@ -896,6 +941,11 @@ input[type="text"]::placeholder {
 .risk-level-high { color: var(--tone-rose-text); }
 .risk-level-insufficient-data { color: var(--color-slate); }
 
+.risk-level-pending {
+  color: var(--color-slate);
+  font-size: 1.05rem;
+}
+
 .risk-summary-sentence {
   margin: 0.6rem auto 0;
   font-size: 1rem;
@@ -907,6 +957,11 @@ input[type="text"]::placeholder {
 @media (prefers-reduced-motion: reduce) {
   .gauge-needle-rotor {
     transition: none;
+  }
+
+  .gauge-needle-rotor.gauge-needle-pending {
+    animation: none;
+    transform: rotate(0deg);
   }
 }
 
@@ -971,6 +1026,28 @@ input[type="text"]::placeholder {
    draw, carried over into the new marker instead. */
 .risk-finding-unknown .finding-marker circle {
   fill: none;
+}
+
+/* A pending row (owner/sell-simulation, still in flight) reuses the same
+   marker, in the neutral color it already falls back to, with its dot
+   pulsing — a small, on-brand "still scanning" cue rather than a
+   generic spinner. Frozen under reduced motion, leaving a plain static
+   dot; the row's own "…" label already reads as in-progress either way. */
+.risk-finding-pending .finding-marker circle {
+  animation: finding-pulse 1.4s ease-in-out infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+@keyframes finding-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .risk-finding-pending .finding-marker circle {
+    animation: none;
+  }
 }
 
 .finding-body {

@@ -1,7 +1,15 @@
 import { isAddress, getAddress, formatUnits } from "https://esm.sh/viem@2.21.19";
 
 import {
-  scoreToken,
+  scoreVerification,
+  scoreHolderConcentration,
+  scoreHolderCount,
+  scoreTokenAge,
+  scoreOwnerPrivileges,
+  scoreOwnerStatus,
+  scoreSellSimulation,
+  scoreMarketData,
+  computeOverallLevel,
   addThousandsSeparators,
   formatCount,
   formatPriceUsd,
@@ -847,7 +855,9 @@ const scanForm = document.getElementById("scan-form");
 const tokenAddressInput = document.getElementById("token-address");
 const addressErrorEl = document.getElementById("address-error");
 const scanButton = document.getElementById("scan-button");
+const scanButtonLabelEl = document.getElementById("scan-button-label");
 const rescanButton = document.getElementById("rescan-button");
+const rescanButtonLabelEl = document.getElementById("rescan-button-label");
 const scanErrorEl = document.getElementById("scan-error");
 const scanResultEl = document.getElementById("scan-result");
 const scanResultTitleEl = document.getElementById("scan-result-title");
@@ -874,6 +884,21 @@ const resultMarketCapEl = document.getElementById("result-market-cap");
 const resultSourceEl = document.getElementById("result-source");
 
 const UNAVAILABLE = "Unavailable";
+const PENDING_LABEL = "Checking…";
+
+// Disables/re-enables both scan entry points together (the top form's
+// Scan button and the result card's Rescan button) — a scan already in
+// flight must block a second one from starting and racing it, since the
+// owner/sell-simulation rate-limit spacing (see scanToken) assumes only
+// one scan runs at a time. Swaps in the same on-brand busy dot (see
+// .button-busy-dot) and label on whichever button wasn't clicked too, so
+// there's never a button that looks idle while a scan is actually running.
+function setScanBusy(isBusy) {
+  scanButton.disabled = isBusy;
+  rescanButton.disabled = isBusy;
+  scanButtonLabelEl.textContent = isBusy ? "Scanning…" : "Scan";
+  rescanButtonLabelEl.textContent = isBusy ? "Scanning…" : "Rescan";
+}
 
 // Findings are grouped by outcome, not just severity: a check that
 // genuinely passed ("info" severity, known data) reads very differently
@@ -1062,6 +1087,7 @@ const GAUGE_NEEDLE_REST_ANGLE = -95;
 // final angle under prefers-reduced-motion instead of animating.
 function setGaugeNeedle(overallLevel) {
   if (!gaugeNeedleRotorEl) return;
+  gaugeNeedleRotorEl.classList.remove("gauge-needle-pending");
 
   const angle = GAUGE_NEEDLE_ANGLE[overallLevel];
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1096,6 +1122,23 @@ function setGaugeNeedle(overallLevel) {
   });
 }
 
+// Sets the gauge to its "still scanning" state: the needle itself sweeps
+// back and forth across the full dial (a `.gauge-needle-pending` CSS
+// animation) instead of pointing at a level nothing has confirmed yet.
+// Reused as the gauge's own on-brand loading indicator, since owner and
+// sell-simulation — the two checks still pending at this point — both
+// affect the final level. `setGaugeNeedle` above always removes this
+// class first, so settling into a real reading cleanly takes over
+// wherever the sweep left off. Reduced motion freezes it at a neutral
+// straight-up angle instead (see the CSS).
+function setGaugePending() {
+  if (!gaugeNeedleRotorEl) return;
+  gaugeNeedleRotorEl.classList.remove("gauge-needle-hidden");
+  gaugeNeedleRotorEl.style.transition = "none";
+  gaugeNeedleRotorEl.style.transform = "";
+  gaugeNeedleRotorEl.classList.add("gauge-needle-pending");
+}
+
 // Renders the result card's title: the token name as plain text, plus
 // the symbol as a small "locked target" tag (mono, accent blue,
 // CSS-bracketed — see .token-symbol-tag) rather than plain "(SYMBOL)"
@@ -1122,63 +1165,184 @@ function renderScanResultTitle(name, symbol) {
   }
 }
 
-// Renders the Risk Score v1 summary: the gauge + level caption, the fixed
-// disclaimer, then findings grouped by outcome (High/Medium/Low risk,
-// then Passed, then Info / unknown — see groupKeyFor). Built with
-// createElement/textContent only — nothing here is ever inserted as HTML,
-// since finding text can echo Blockscout/RPC/Worker data. `sellSimulation`
-// (optional) is the raw honeypot-check result, used only to build the
-// "How this was checked" panel under that one finding.
-function renderRiskSummary(overallLevel, findings, sellSimulation) {
+// Renders the level caption + gauge for the "still scanning" state — see
+// setGaugePending. Kept separate from renderRiskLevelFinal below so the
+// two states (pending vs settled) can never be produced by the same
+// code path with half-stale data.
+function renderRiskLevelPending() {
+  riskLevelValueEl.textContent = "Finalizing risk level…";
+  riskLevelValueEl.className = "risk-level-value risk-level-pending";
+  riskSummarySentenceEl.textContent = "Waiting on the owner and sell-simulation checks below — both affect the overall level.";
+  setGaugePending();
+}
+
+// Renders the level caption + gauge once overallLevel is final (every
+// check that affects scoring — including owner/sell-simulation — has
+// resolved).
+function renderRiskLevelFinal(overallLevel) {
   riskLevelValueEl.textContent = overallLevel;
   riskLevelValueEl.className = `risk-level-value risk-level-${overallLevel.toLowerCase().replace(/\s+/g, "-")}`;
   riskSummarySentenceEl.textContent = SUMMARY_SENTENCE[overallLevel] ?? "";
   setGaugeNeedle(overallLevel);
+}
 
-  riskFindingsEl.innerHTML = "";
-  for (const groupKey of GROUP_ORDER) {
-    const group = findings.filter((f) => groupKeyFor(f) === groupKey);
-    if (group.length === 0) continue;
+// Builds one real (resolved) finding row: marker + title/detail, plus the
+// sell-simulation evidence / technical-details panels those two checks
+// can carry. Built with createElement/textContent only — nothing here is
+// ever inserted as HTML, since finding text can echo Blockscout/RPC/
+// Worker data. `sellSimulation` (optional) is the raw honeypot-check
+// result, used only to build the "How this was checked" panel under that
+// one finding.
+function buildFindingRow(f, groupKey, sellSimulation) {
+  const item = document.createElement("div");
+  item.className = `risk-finding risk-finding-${groupKey}`;
+  item.appendChild(buildFindingMarker());
 
-    const section = document.createElement("div");
-    section.className = "risk-findings-group";
+  const body = document.createElement("div");
+  body.className = "finding-body";
 
-    const heading = document.createElement("h4");
-    heading.textContent = `${GROUP_LABEL[groupKey]} (${group.length})`;
-    section.appendChild(heading);
+  const title = document.createElement("p");
+  title.className = "risk-finding-title";
+  title.textContent = f.title;
 
-    for (const f of group) {
-      const item = document.createElement("div");
-      item.className = `risk-finding risk-finding-${groupKey}`;
-      item.appendChild(buildFindingMarker());
+  const detail = document.createElement("p");
+  detail.className = "risk-finding-detail";
+  detail.textContent = f.detail;
 
-      const body = document.createElement("div");
-      body.className = "finding-body";
+  body.append(title, detail);
 
-      const title = document.createElement("p");
-      title.className = "risk-finding-title";
-      title.textContent = f.title;
-
-      const detail = document.createElement("p");
-      detail.className = "risk-finding-detail";
-      detail.textContent = f.detail;
-
-      body.append(title, detail);
-
-      if (f.id === "sell-simulation" && sellSimulation && (sellSimulation.pools?.length || sellSimulation.holderAttempts?.length)) {
-        body.appendChild(buildSellSimulationEvidence(sellSimulation));
-      }
-
-      if ((f.id === "owner-status" || f.id === "sell-simulation") && f.diagnostics?.length) {
-        const techPanel = buildFindingTechnicalDetails(f.diagnostics);
-        if (techPanel) body.appendChild(techPanel);
-      }
-
-      item.appendChild(body);
-      section.appendChild(item);
-    }
-    riskFindingsEl.appendChild(section);
+  if (f.id === "sell-simulation" && sellSimulation && (sellSimulation.pools?.length || sellSimulation.holderAttempts?.length)) {
+    body.appendChild(buildSellSimulationEvidence(sellSimulation));
   }
+
+  if ((f.id === "owner-status" || f.id === "sell-simulation") && f.diagnostics?.length) {
+    const techPanel = buildFindingTechnicalDetails(f.diagnostics);
+    if (techPanel) body.appendChild(techPanel);
+  }
+
+  item.appendChild(body);
+  return item;
+}
+
+// Finds this severity group's section (High/Medium/Low/Passed/Info), or
+// creates it in the right GROUP_ORDER position among whichever other
+// groups already exist — findings arrive one at a time now (some
+// immediately from Blockscout data, owner/sell-simulation later), so the
+// grouped list has to be able to grow incrementally instead of being
+// rebuilt from a complete findings array in one pass.
+function getOrCreateFindingsGroup(groupKey) {
+  const existing = riskFindingsEl.querySelector(`.risk-findings-group[data-group="${groupKey}"]`);
+  if (existing) return existing;
+
+  const section = document.createElement("div");
+  section.className = "risk-findings-group";
+  section.dataset.group = groupKey;
+  section.appendChild(document.createElement("h4"));
+
+  const targetIndex = GROUP_ORDER.indexOf(groupKey);
+  const laterGroup = Array.from(riskFindingsEl.querySelectorAll(".risk-findings-group[data-group]")).find(
+    (el) => GROUP_ORDER.indexOf(el.dataset.group) > targetIndex,
+  );
+  riskFindingsEl.insertBefore(section, laterGroup ?? null);
+  return section;
+}
+
+function updateGroupHeading(section, groupKey) {
+  const count = section.querySelectorAll(".risk-finding").length;
+  section.querySelector("h4").textContent = `${GROUP_LABEL[groupKey]} (${count})`;
+}
+
+// Adds one resolved finding to the findings list, in its severity group
+// (created on demand — see getOrCreateFindingsGroup), without touching
+// any other already-rendered row. This is the only way findings are ever
+// added: once up front for each Blockscout-only finding, then once more
+// each time owner/sell-simulation resolves (see resolvePendingFinding).
+function addFindingToGroup(f, sellSimulation) {
+  const groupKey = groupKeyFor(f);
+  const section = getOrCreateFindingsGroup(groupKey);
+  section.appendChild(buildFindingRow(f, groupKey, sellSimulation));
+  updateGroupHeading(section, groupKey);
+}
+
+// The two checks that only start once Blockscout data is in (see the
+// sequencing note above fetchOwnerViaWorker's call site) — their pending
+// row copy reuses the same check names as their eventual finding titles,
+// per GROUP_LABEL/scoreOwnerStatus/scoreSellSimulation above.
+const PENDING_CHECKS = [
+  { id: "owner-status", label: "Reading contract owner…", detail: "Reading owner() from the contract via the Worker RPC relay." },
+  { id: "sell-simulation", label: "Simulating a sell…", detail: "Testing a simulated transfer to a detected liquidity pool, via the Worker RPC relay." },
+];
+
+// A pending row's marker reuses the exact same dot-and-dash SVG as a
+// resolved finding (see buildFindingMarker) — only its color (neutral,
+// via .risk-finding-pending) and a pulse on the dot (CSS, paused under
+// reduced motion) mark it as still in flight, so it reads as the same
+// signal list rather than a different loading-state component.
+function buildPendingFindingRow({ id, label, detail }) {
+  const item = document.createElement("div");
+  item.className = "risk-finding risk-finding-pending";
+  item.dataset.pendingId = id;
+  item.appendChild(buildFindingMarker());
+
+  const body = document.createElement("div");
+  body.className = "finding-body";
+
+  const title = document.createElement("p");
+  title.className = "risk-finding-title";
+  title.textContent = label;
+
+  const detailEl = document.createElement("p");
+  detailEl.className = "risk-finding-detail";
+  detailEl.textContent = detail;
+
+  body.append(title, detailEl);
+  item.appendChild(body);
+  return item;
+}
+
+function getOrCreatePendingGroup() {
+  const existing = riskFindingsEl.querySelector(".risk-findings-group-pending");
+  if (existing) return existing;
+
+  const section = document.createElement("div");
+  section.className = "risk-findings-group risk-findings-group-pending";
+  section.appendChild(document.createElement("h4"));
+  // Always first — the in-progress checks are the most relevant thing on
+  // the card until they resolve.
+  riskFindingsEl.insertBefore(section, riskFindingsEl.firstChild);
+  return section;
+}
+
+// Removes the pending group entirely once nothing in it is still
+// pending, rather than leaving an empty "Checking… (0)" section behind.
+function updatePendingHeading(section) {
+  const count = section.querySelectorAll(".risk-finding").length;
+  if (count === 0) {
+    section.remove();
+    return;
+  }
+  section.querySelector("h4").textContent = `Checking… (${count})`;
+}
+
+function addPendingRows() {
+  const section = getOrCreatePendingGroup();
+  for (const check of PENDING_CHECKS) {
+    section.appendChild(buildPendingFindingRow(check));
+  }
+  updatePendingHeading(section);
+}
+
+// Removes one check's pending row and replaces it with its resolved
+// finding row, in place — the rest of the findings list (already-shown
+// Blockscout findings, and the other still-pending row) is untouched.
+function resolvePendingFinding(id, finding, sellSimulation) {
+  const row = riskFindingsEl.querySelector(`.risk-finding-pending[data-pending-id="${id}"]`);
+  if (row) {
+    const pendingSection = row.closest(".risk-findings-group-pending");
+    row.remove();
+    if (pendingSection) updatePendingHeading(pendingSection);
+  }
+  addFindingToGroup(finding, sellSimulation);
 }
 
 async function scanToken(rawAddress) {
@@ -1198,9 +1362,7 @@ async function scanToken(rawAddress) {
   // contract instead of guessing at one — see testWorkerConnection below.
   lastScannedTokenAddress = address;
 
-  scanButton.disabled = true;
-  scanButton.textContent = "Scanning…";
-  rescanButton.disabled = true;
+  setScanBusy(true);
 
   try {
     // fetchOwnerViaWorker is deliberately NOT in this Promise.all — see
@@ -1317,47 +1479,19 @@ async function scanToken(rawAddress) {
     const volume24hUsd = tokenBody?.volume_24h ?? null;
     const marketCapUsd = tokenBody?.circulating_market_cap ?? null;
 
-    // The owner() read and the sell-simulation honeypot check (pool
-    // detection, then transfer simulations) are the only two things that
-    // hit the Worker's eth_call route during a scan. They're run here,
-    // sequentially with a gap between them (never in parallel with each
-    // other), specifically to avoid bursting the shared upstream RPC's
-    // tight rate limit — see the CHUNK_DELAY_MS doc comment near the top
-    // of this file. Each is also individually retried once as a whole
-    // (not just per-batch — see withWholeCheckRateLimitRetry) if it comes
-    // back rate-limited even after the Worker's and callWorkerChunked's
-    // own retries. If it's still rate-limited after that, the honest
-    // "Unknown" outcome (with its real diagnostics) is what gets shown —
-    // never hidden or silently swallowed.
-    const ownerOutcome = await withWholeCheckRateLimitRetry(
-      () => fetchOwnerViaWorker(address),
-      (r) => r.owner === null && hasRateLimitedDiagnostic(r.diagnostics),
-    );
-    const { owner, diagnostics: ownerDiagnostics } = ownerOutcome;
-
-    await sleep(CHUNK_DELAY_MS);
-
-    const sellSimulation = await withWholeCheckRateLimitRetry(
-      () => runSellSimulation(address, holders),
-      (r) => r.status === "unreachable" && hasRateLimitedDiagnostic(r.diagnostics),
-    );
-
-    const { overallLevel, findings } = scoreToken({
-      isVerified,
-      abi,
-      isProxy,
-      proxyAdmin,
-      proxyAdminIsContract,
-      holders,
-      totalSupplyRaw,
-      holdersCount,
-      createdAtIso,
-      owner,
-      ownerDiagnostics,
-      sellSimulation,
-      marketData: { priceUsd, volume24hUsd, marketCapUsd },
-    });
-    renderRiskSummary(overallLevel, findings, sellSimulation);
+    // --- Everything above this point needs only Blockscout data, which
+    // has already resolved — render all of it now instead of waiting on
+    // the two Worker checks below, so there's no dead period between
+    // tapping Scan and seeing the token. Owner/sell-simulation findings
+    // (below) render as their own pending rows in the meantime.
+    const blockscoutFindings = [
+      scoreVerification(isVerified),
+      ...scoreHolderConcentration(holders, totalSupplyRaw),
+      scoreHolderCount(holdersCount),
+      scoreTokenAge(createdAtIso),
+      ...scoreOwnerPrivileges({ isVerified, abi, isProxy, proxyAdmin, proxyAdminIsContract }),
+      scoreMarketData({ priceUsd, volume24hUsd, marketCapUsd }),
+    ];
 
     renderScanResultTitle(name, symbol);
 
@@ -1381,7 +1515,8 @@ async function scanToken(rawAddress) {
 
     resultHoldersEl.textContent = holdersCount === null ? UNAVAILABLE : formatCount(holdersCount);
     resultVerifiedEl.textContent = isVerified === null ? UNAVAILABLE : isVerified ? "Yes" : "No";
-    resultOwnerEl.textContent = owner ? `${owner} (via ${WORKER_SOURCE})` : UNAVAILABLE;
+    // Owner needs the Worker read below — filled in once that resolves.
+    resultOwnerEl.textContent = PENDING_LABEL;
 
     // Full-precision values here (vs. the compact $867.6M-style figures in
     // the risk finding above) — see MARKET_DATA_ASSUMED_CURRENCY for why
@@ -1393,15 +1528,58 @@ async function scanToken(rawAddress) {
     resultMarketCapEl.textContent =
       marketCapUsd != null ? `${currencyPrefix}${addThousandsSeparators(formatPriceUsd(marketCapUsd))}` : UNAVAILABLE;
 
-    resultSourceEl.textContent = owner ? `${BLOCKSCOUT_SOURCE} + ${WORKER_SOURCE} (secondary, owner)` : BLOCKSCOUT_SOURCE;
+    // Only mentions the Worker once owner has actually resolved via it —
+    // updated again alongside resultOwnerEl below.
+    resultSourceEl.textContent = BLOCKSCOUT_SOURCE;
+
+    for (const f of blockscoutFindings) addFindingToGroup(f);
+    addPendingRows();
+    renderRiskLevelPending();
 
     scanResultEl.hidden = false;
 
     showTechDetailsIfNeeded();
+
+    // The owner() read and the sell-simulation honeypot check (pool
+    // detection, then transfer simulations) are the only two things that
+    // hit the Worker's eth_call route during a scan. They're run here,
+    // sequentially with a gap between them (never in parallel with each
+    // other), specifically to avoid bursting the shared upstream RPC's
+    // tight rate limit — see the CHUNK_DELAY_MS doc comment near the top
+    // of this file. That wait is no longer a blank screen: both rows
+    // already show their own pending state above, from addPendingRows.
+    // Each check is also individually retried once as a whole (not just
+    // per-batch — see withWholeCheckRateLimitRetry) if it comes back
+    // rate-limited even after the Worker's and callWorkerChunked's own
+    // retries. If it's still rate-limited after that, the honest
+    // "Unknown" outcome (with its real diagnostics) is what replaces the
+    // pending row — never a dead spinner, never a generic error flash.
+    const ownerOutcome = await withWholeCheckRateLimitRetry(
+      () => fetchOwnerViaWorker(address),
+      (r) => r.owner === null && hasRateLimitedDiagnostic(r.diagnostics),
+    );
+    const { owner, diagnostics: ownerDiagnostics } = ownerOutcome;
+    const ownerFinding = scoreOwnerStatus(owner, ownerDiagnostics);
+    resolvePendingFinding("owner-status", ownerFinding, null);
+
+    resultOwnerEl.textContent = owner ? `${owner} (via ${WORKER_SOURCE})` : UNAVAILABLE;
+    resultSourceEl.textContent = owner ? `${BLOCKSCOUT_SOURCE} + ${WORKER_SOURCE} (secondary, owner)` : BLOCKSCOUT_SOURCE;
+
+    await sleep(CHUNK_DELAY_MS);
+
+    const sellSimulation = await withWholeCheckRateLimitRetry(
+      () => runSellSimulation(address, holders),
+      (r) => r.status === "unreachable" && hasRateLimitedDiagnostic(r.diagnostics),
+    );
+    const sellSimFinding = scoreSellSimulation(sellSimulation);
+    resolvePendingFinding("sell-simulation", sellSimFinding, sellSimulation);
+
+    // Both checks that affect scoring have resolved — the level can only
+    // be computed (and the gauge settled) now, not before.
+    const overallLevel = computeOverallLevel([...blockscoutFindings, ownerFinding, sellSimFinding]);
+    renderRiskLevelFinal(overallLevel);
   } finally {
-    scanButton.disabled = false;
-    scanButton.textContent = "Scan";
-    rescanButton.disabled = false;
+    setScanBusy(false);
   }
 }
 

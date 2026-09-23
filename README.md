@@ -59,31 +59,67 @@ headers for this site's origin.
   (verification status and, when verified, the ABI), and
   `GET /tokens/{address}/holders` (top holder balances). A follow-up call
   to `GET /transactions/{creation_transaction_hash}` gets the contract's
-  deployment timestamp. If the Worker RPC secondary is reachable, it's
-  additionally used for things Blockscout has no generic field for:
-  reading the contract's `owner()`, and the
-  [sell-simulation honeypot check](#sell-simulation-honeypot-check).
+  deployment timestamp. **The result card renders progressively, in
+  three stages, rather than waiting on everything at once:**
+  1. While that first, Blockscout-only round trip is in flight, the
+     **Scan** button (and **Rescan**, if re-running) shows a busy state —
+     disabled, "Scanning…", with the same on-brand pulsing-dot indicator
+     used everywhere else in this flow (see [Design](#design)) — so
+     there's no dead period between tapping Scan and seeing something.
+  2. The moment Blockscout data resolves, the result card appears
+     immediately with the title, the full token details table, and every
+     finding that only needs Blockscout data (verification, holder
+     concentration and count, token age, owner-privilege detection,
+     market data). The two checks that also need the Worker RPC —
+     **Owner status** and the
+     [sell-simulation honeypot check](#sell-simulation-honeypot-check) —
+     render as their own rows in a **"Checking…"** group instead, each
+     with a short label reusing its eventual finding's own name ("Reading
+     contract owner…", "Simulating a sell…") and the same pulsing-dot
+     marker as a resolved finding, just neutral-colored and animated. The
+     overall risk level/gauge shows a **"Finalizing risk level…"** state
+     (the gauge's needle sweeps the full dial instead of pointing
+     anywhere) rather than committing to a level before both of those
+     checks — which factor into it — are in.
+  3. If the Worker RPC secondary is reachable, it's then used for the two
+     things Blockscout has no generic field for: reading the contract's
+     `owner()`, then the sell-simulation check. These still run
+     **sequentially, with a gap between them** (never in parallel), to
+     avoid bursting the shared upstream RPC's tight rate limit — see
+     [Rate limiting](#rate-limiting) — but that wait is no longer a blank
+     screen: each pending row replaces itself in place with its resolved
+     finding (or the honest "Unknown" outcome, if the check couldn't
+     complete — never a stuck loading row) as soon as it's ready, without
+     disturbing anything else already on the page, and the gauge settles
+     into its final reading once both are in.
+
   Every field that couldn't be determined shows **"Unavailable"** rather
   than a guess, and the result card's **Data source** row says exactly
-  which source(s) contributed. If any Blockscout request fails outright
-  (not a "not found"), a collapsible **Technical details** panel shows the
-  real error for each request that was made. The **Owner status** and
-  **Sell-simulation honeypot check** findings each get their own
-  collapsible **Technical details** too, specifically when their own
-  Worker call failed — see [below](#sell-simulation-honeypot-check). A
-  small **Rescan** button on the result card re-runs the scan for the
-  same address — handy since a check that came back Unknown due to rate
-  limiting (see [Known limitations](#known-limitations)) often succeeds
-  on a retry a little later, without retyping the address.
+  which source(s) contributed (updated once the owner read resolves). If
+  any Blockscout request fails outright (not a "not found"), a
+  collapsible **Technical details** panel shows the real error for each
+  request that was made. The **Owner status** and **Sell-simulation
+  honeypot check** findings each get their own collapsible **Technical
+  details** too, specifically when their own Worker call failed — see
+  [below](#sell-simulation-honeypot-check). A small **Rescan** button on
+  the result card re-runs the scan for the same address — handy since a
+  check that came back Unknown due to rate limiting (see
+  [Known limitations](#known-limitations)) often succeeds on a retry a
+  little later, without retyping the address; both Scan and Rescan are
+  disabled together for the whole scan (not just its first stage), since
+  the owner/sell-simulation rate-limit spacing above assumes only one
+  scan runs at a time.
 - **Risk Score v1** — every scan of a contract also runs a transparent,
   rule-based risk check (see below) and shows a summary card — the
-  overall level as a large badge with a one-line plain-language summary
-  (a presentational lookup by the already-computed level, e.g. "No major
-  red flags turned up in these automated checks." for Low — it doesn't
-  change what's computed, only how it reads at a glance), then findings
-  grouped by severity — above the token details. The result card's title
-  shows the token's `Name (SYMBOL)` when both are known, falling back to
-  whichever one is available, or "Token" if neither is.
+  overall level as the gauge described in [Design](#design) with a
+  one-line plain-language summary (a presentational lookup by the
+  already-computed level, e.g. "No major red flags turned up in these
+  automated checks." for Low — it doesn't change what's computed, only
+  how it reads at a glance), then findings grouped by severity as a
+  signal list — above the token details. The result card's title shows
+  the token's name plus the symbol as a small bracketed tag (see
+  [Design](#design)) when both are known, falling back to whichever one
+  is available, or "Token" if neither is.
 
 ## Risk Score v1
 
@@ -389,19 +425,29 @@ either. It's built entirely with plain CSS custom properties in
   - The risk level (previously a flat colored pill) is a semicircular
     SVG **gauge** — a thin guide ring behind three colored Low/Medium/
     High zone arcs, with a needle pivoting on an accent-blue hub dot
-    styled like the logo's own center dot. The needle sweeps into
-    position on load/rescan (skipped under `prefers-reduced-motion`) and
-    hides entirely for "Insufficient data" rather than implying a
-    position the data doesn't support. The SVG is `aria-hidden`; the
-    caption below it (unchanged `#risk-level-value` text) is the real,
-    always-present text equivalent.
+    styled like the logo's own center dot. While the owner/sell-
+    simulation checks are still pending (see [Scan a token](#features)),
+    the needle sweeps continuously across the full dial as the gauge's
+    own "still working" indicator; once both resolve it settles into the
+    real reading the same way it always animated in (skipped/frozen at a
+    neutral angle under `prefers-reduced-motion`). It hides entirely for
+    a final "Insufficient data" rather than implying a position the data
+    doesn't support. The SVG is `aria-hidden`; the caption below it
+    (`#risk-level-value` — "Finalizing risk level…" while pending) is the
+    real, always-present text equivalent.
   - Findings are a **signal list**: each row gets a small dot + a short
     two-dash marker (the same rounded-cap dash pattern as the logo's
     dashed line) colored by severity, in place of the old colored-card-
     with-left-border treatment; an "Unknown" outcome gets a hollow dot,
     carrying over the distinction the old dashed left border used to
     draw. Severity color lives only on the marker, never washed across
-    the text.
+    the text. A still-pending row (owner/sell-simulation, before they
+    resolve) reuses the exact same marker with its dot pulsing instead —
+    the on-brand loading indicator everywhere a check is in flight,
+    including the same pulsing dot on a disabled Scan/Rescan button —
+    rather than a generic spinner; frozen (no pulse) under
+    `prefers-reduced-motion`, since the row's own "…" label already
+    reads as in-progress.
   - A **very faint concentric-ring texture** (`--hero-texture`, a
     `repeating-radial-gradient` reusing `--color-border` directly rather
     than a new low-opacity layer) sits behind the header and every
