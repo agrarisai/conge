@@ -17,12 +17,15 @@
   --radius-sm: 8px;
   --spacing: 1.25rem;
 
-  /* Faint concentric-ring texture for the hero (header + intro) only —
-     echoes the logo's ring motif at a scale/contrast that reads as
-     paper texture, not decoration. --color-border is already tuned to
-     sit barely-there on ivory, so reusing it directly (no extra opacity
-     layer) keeps this from ever competing with foreground text. */
-  --hero-texture: repeating-radial-gradient(
+  /* Faint concentric-ring texture, page-wide — echoes the logo's ring
+     motif at a scale/contrast that reads as paper texture, not
+     decoration. --color-border is already tuned to sit barely-there on
+     ivory, so reusing it directly (no extra opacity layer) keeps this
+     from ever competing with foreground text. Painted on .bg-rings (see
+     Background layer below), not on individual sections — it used to be
+     hero-only, applied directly to .site-header/.intro; now it's one
+     continuous layer behind the whole page instead. */
+  --ring-texture: repeating-radial-gradient(
     circle at 90% 8%,
     transparent 0,
     transparent 25px,
@@ -83,6 +86,30 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* --- Background layer --------------------------------------------------
+   The ring texture as one continuous layer behind the whole page (see
+   --ring-texture above), not painted per-section. Fixed + oversized
+   beyond the viewport (60vh top/bottom) so scroll-fx.js's parallax below
+   — which clamps its own translateY to stay within that same 60vh, with
+   a margin — can never outrun the layer and reveal an edge, however far
+   the page scrolls. z-index: -1 sits it behind every card's opaque
+   surface, so it only ever shows in the ivory gaps between them, never
+   under body text. scroll-fx.js nudges its own transform (translateY
+   only — never a layout property) at a fraction of scroll speed for a
+   subtle sense of depth; without that script (or under
+   prefers-reduced-motion, which it checks itself) this simply renders as
+   a static backdrop. */
+.bg-rings {
+  position: fixed;
+  top: -60vh;
+  right: -10vw;
+  bottom: -60vh;
+  left: -10vw;
+  z-index: -1;
+  background-image: var(--ring-texture);
+  pointer-events: none;
+}
+
 h1, h2, h3, h4 {
   font-family: var(--font-heading);
   color: var(--color-ink);
@@ -107,7 +134,6 @@ summary:focus-visible {
 .site-header {
   padding: 1.5rem var(--spacing) 1.125rem;
   border-bottom: 1px solid var(--color-border);
-  background-image: var(--hero-texture);
 }
 
 .header-inner {
@@ -356,6 +382,64 @@ main {
   gap: 1.25rem;
 }
 
+/* --- Scroll sweep (index.html only) -------------------------------------
+   The one deliberate scroll-triggered moment on the page (see the
+   brief): a dot-and-dash mark — the exact marker used for a signal-list
+   finding (see .finding-marker) — travels once across a hairline track
+   as the scan section first enters view, then stays gone. Not a repeat
+   effect and not applied to any other section; scroll-fx.js fires this
+   via IntersectionObserver the first time only, then disconnects.
+   --sweep-distance is set by scroll-fx.js to the track's actual measured
+   width right before the animation starts (a plain CSS % of the mark's
+   OWN small width wouldn't reach across it). */
+.scroll-sweep {
+  position: relative;
+  height: 14px;
+}
+
+.scroll-sweep::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background-color: var(--color-border);
+  transform: translateY(-50%);
+}
+
+.scroll-sweep-mark {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 64px;
+  height: 14px;
+  fill: var(--color-accent);
+  stroke: var(--color-accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  opacity: 0;
+  transform: translateX(-64px);
+}
+
+.scroll-sweep.is-active .scroll-sweep-mark {
+  animation: scroll-sweep-move 1.2s ease-out forwards;
+}
+
+@keyframes scroll-sweep-move {
+  0% { transform: translateX(-64px); opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { transform: translateX(var(--sweep-distance, 100%)); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll-sweep.is-active .scroll-sweep-mark {
+    animation: none;
+    opacity: 0;
+  }
+}
+
 .card {
   background-color: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -481,7 +565,6 @@ main {
 
 .intro {
   padding: 0.25rem 0.1rem 0.25rem;
-  background-image: var(--hero-texture);
 }
 
 .intro-headline {
