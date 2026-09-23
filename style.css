@@ -72,12 +72,23 @@
 html, body {
   margin: 0;
   padding: 0;
-  /* Safety net, not the fix: the actual cause (the scroll-sweep mark's
-     translateX escaping its container's unclipped bounds — see
-     .scroll-sweep) is fixed at the source above. This just guarantees
-     nothing else can ever make the page swipeable sideways, without
-     masking a real bug were one to reappear (nothing here relies on
-     intentional horizontal overflow anywhere on the site). */
+}
+
+/* Safety net, not the fix: the actual cause of the horizontal-scroll bug
+   this guards against (the scroll-sweep mark's translateX escaping its
+   container's unclipped bounds — see .scroll-sweep) is fixed at the
+   source. This just guarantees nothing else can ever make the page
+   swipeable sideways, without masking a real bug were one to reappear.
+   Deliberately on html only, not body too: html's overflow is what the
+   spec propagates to the viewport's own scrolling box, so this clips
+   horizontally without creating a scrolling context of its own. Setting
+   it on body as well (as a previous version of this rule did) gives body
+   its own explicit (and, per the overflow-x/-y coupling rule, forced-
+   -auto) overflow instead of staying a plain, non-scrolling block —
+   which breaks position: sticky on .site-header, since sticky resolves
+   against the nearest non-visible-overflow ancestor and that becomes
+   body's own nested scroll box instead of the real viewport scroll. */
+html {
   overflow-x: hidden;
 }
 
@@ -143,8 +154,27 @@ summary:focus-visible {
 
 /* --- Header ----------------------------------------------------------- */
 
+/* Sticky, compact, and opaque: pinned to the top of the viewport while
+   the page scrolls underneath (position: sticky needs an explicit top
+   and doesn't need a positioned ancestor, unlike fixed). z-index sits it
+   above ordinary content but below the hamburger's own overlay/panel
+   (40/41 — see below), so opening the menu still visually covers it, not
+   the other way round. background-color is explicit and opaque (not
+   inherited transparency) for two reasons at once: it's what keeps
+   scrolled-under content from showing through a persistently-visible
+   header, and it's what keeps the page-wide .bg-rings texture layer
+   (z-index: -1, behind everything) from showing through here — the
+   header is the one place on the page that's deliberately plain, since
+   the ring texture is a hero/intro-and-below treatment, not a chrome
+   treatment. The hairline border-bottom is the "subtle separation" this
+   needs now that content passes under it continuously; matches the
+   site's no-drop-shadow design language rather than adding one. */
 .site-header {
-  padding: 1.5rem var(--spacing) 1.125rem;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding: 0.55rem var(--spacing);
+  background-color: var(--color-bg);
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -166,13 +196,15 @@ summary:focus-visible {
   margin: 0;
   font-size: 1.375rem;
   font-weight: 600;
+  line-height: 1.15;
   letter-spacing: -0.01em;
 }
 
 .tagline {
-  margin: 0.1rem 0 0;
+  margin: 0.05rem 0 0;
   font-size: 0.6875rem;
   font-weight: 600;
+  line-height: 1.2;
   letter-spacing: 0.1em;
   color: var(--color-slate);
   text-transform: uppercase;
