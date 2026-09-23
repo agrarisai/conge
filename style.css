@@ -72,6 +72,13 @@
 html, body {
   margin: 0;
   padding: 0;
+  /* Safety net, not the fix: the actual cause (the scroll-sweep mark's
+     translateX escaping its container's unclipped bounds — see
+     .scroll-sweep) is fixed at the source above. This just guarantees
+     nothing else can ever make the page swipeable sideways, without
+     masking a real bug were one to reappear (nothing here relies on
+     intentional horizontal overflow anywhere on the site). */
+  overflow-x: hidden;
 }
 
 body {
@@ -88,23 +95,28 @@ body {
 
 /* --- Background layer --------------------------------------------------
    The ring texture as one continuous layer behind the whole page (see
-   --ring-texture above), not painted per-section. Fixed + oversized
-   beyond the viewport (60vh top/bottom) so scroll-fx.js's parallax below
-   — which clamps its own translateY to stay within that same 60vh, with
-   a margin — can never outrun the layer and reveal an edge, however far
-   the page scrolls. z-index: -1 sits it behind every card's opaque
-   surface, so it only ever shows in the ivory gaps between them, never
-   under body text. scroll-fx.js nudges its own transform (translateY
-   only — never a layout property) at a fraction of scroll speed for a
-   subtle sense of depth; without that script (or under
-   prefers-reduced-motion, which it checks itself) this simply renders as
-   a static backdrop. */
+   --ring-texture above), not painted per-section. Fixed + oversized only
+   vertically (60vh top/bottom) so scroll-fx.js's parallax below — which
+   clamps its own translateY to stay within that same 60vh, with a
+   margin — can never outrun the layer and reveal an edge, however far
+   the page scrolls. Exactly viewport-width (left/right: 0, no vw-based
+   horizontal overhang): the parallax only ever moves this layer
+   vertically, so there's nothing for horizontal slack to buy here, and
+   `vw` units can measure wider than the visible viewport on some mobile
+   browsers — not worth the risk of a fixed element contributing
+   horizontal scroll for a buffer this layer never uses. z-index: -1 sits
+   it behind every card's opaque surface, so it only ever shows in the
+   ivory gaps between them, never under body text. scroll-fx.js nudges
+   its own transform (translateY only — never a layout property) at a
+   fraction of scroll speed for a subtle sense of depth; without that
+   script (or under prefers-reduced-motion, which it checks itself) this
+   simply renders as a static backdrop. */
 .bg-rings {
   position: fixed;
   top: -60vh;
-  right: -10vw;
+  right: 0;
   bottom: -60vh;
-  left: -10vw;
+  left: 0;
   z-index: -1;
   background-image: var(--ring-texture);
   pointer-events: none;
@@ -395,6 +407,13 @@ main {
 .scroll-sweep {
   position: relative;
   height: 14px;
+  /* The mark below travels past this element's own right edge by design
+     (see --sweep-distance) — without clipping that, the translateX
+     stays applied after the animation's `forwards` fill-mode holds its
+     end state, permanently widening the whole page's scrollable area
+     and leaving it swipeable sideways. This is the actual fix for that;
+     overflow-x: hidden on html/body below is only a backstop. */
+  overflow: hidden;
 }
 
 .scroll-sweep::before {
