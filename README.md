@@ -418,7 +418,24 @@ either. It's built entirely with plain CSS custom properties in
   per row to two side by side once there's room, rather than staying a
   long single-column stack). No drop shadows, no numbered 01/02/03
   markers — the hierarchy comes from type, color, spacing, and the one
-  bold gauge, not repeated decoration.
+  bold gauge, not repeated decoration. The header is `position: sticky`
+  (not `fixed` — it stays in normal flow, so nothing else needs extra
+  top padding to compensate) and compact: logo, wordmark, tagline, and
+  the hamburger button all stay, just with much tighter vertical padding
+  around them than a one-off hero banner would use, and a solid ivory
+  `background-color` (not inherited transparency) so scrolled-under
+  content never shows through it and the page-wide ring texture stays
+  behind it, not visible through it — see above. A hairline
+  `border-bottom` is the separation from content passing underneath,
+  matching the site's no-drop-shadow language rather than adding one; a
+  `z-index` keeps it above ordinary content but below the hamburger's
+  own overlay/panel, so opening the menu still visually covers it. (One
+  care point for anyone touching this again: `style.css` also has an
+  `overflow-x: hidden` safety net against accidental horizontal scroll,
+  and it's deliberately on `html` only, not `body` too — setting it on
+  both breaks `position: sticky` here, since it turns `body` into its
+  own nested scroll container instead of letting its overflow propagate
+  to the viewport the normal way.)
 - **Radar/target motif** — a deliberate second design pass reusing the
   logo's own concentric-rings-and-dashed-line identity, so the page
   reads as this brand rather than a generic light SaaS template:
@@ -453,14 +470,16 @@ either. It's built entirely with plain CSS custom properties in
     than a new low-opacity layer) is one continuous fixed layer
     (`.bg-rings`, `z-index: -1`) behind the whole page on every page, not
     just the hero — it only ever shows in the ivory gaps between cards,
-    since every card has its own opaque surface. Contrast-checked: the
-    ring itself measures ~1.2:1 against ivory (i.e., genuinely textural),
-    and ink text over a ring pixel in the worst case still measures
-    ~14.5:1, far above the 4.5:1 body-text floor. `scroll-fx.js` gives it
-    a gentle parallax — its own `transform: translateY()` (never a
-    layout property) moves at 50% of scroll speed, clamped so it can
-    never outrun the layer's 60vh buffer and reveal an edge, however long
-    the page — for a subtle sense of depth; static (no parallax) under
+    since every card has its own opaque surface, and the header (see
+    below) is deliberately one too: it's the one piece of chrome that's
+    plain on purpose, not textured. Contrast-checked: the ring itself
+    measures ~1.2:1 against ivory (i.e., genuinely textural), and ink
+    text over a ring pixel in the worst case still measures ~14.5:1, far
+    above the 4.5:1 body-text floor. `scroll-fx.js` gives it a gentle
+    parallax — its own `transform: translateY()` (never a layout
+    property) moves at 50% of scroll speed, clamped so it can never
+    outrun the layer's 60vh buffer and reveal an edge, however long the
+    page — for a subtle sense of depth; static (no parallax) under
     `prefers-reduced-motion`.
   - The token **symbol**, where it appears in the result card title, is
     a small `.token-symbol-tag` — JetBrains Mono, accent blue, CSS
