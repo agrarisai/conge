@@ -448,18 +448,35 @@ either. It's built entirely with plain CSS custom properties in
     rather than a generic spinner; frozen (no pulse) under
     `prefers-reduced-motion`, since the row's own "…" label already
     reads as in-progress.
-  - A **very faint concentric-ring texture** (`--hero-texture`, a
+  - A **very faint concentric-ring texture** (`--ring-texture`, a
     `repeating-radial-gradient` reusing `--color-border` directly rather
-    than a new low-opacity layer) sits behind the header and every
-    page's `.intro` block only — never behind cards or repeated down the
-    page. Contrast-checked: the ring itself measures ~1.2:1 against
-    ivory (i.e., genuinely textural), and ink text over a ring pixel in
-    the worst case still measures ~14.5:1, far above the 4.5:1 body-text
-    floor.
+    than a new low-opacity layer) is one continuous fixed layer
+    (`.bg-rings`, `z-index: -1`) behind the whole page on every page, not
+    just the hero — it only ever shows in the ivory gaps between cards,
+    since every card has its own opaque surface. Contrast-checked: the
+    ring itself measures ~1.2:1 against ivory (i.e., genuinely textural),
+    and ink text over a ring pixel in the worst case still measures
+    ~14.5:1, far above the 4.5:1 body-text floor. `scroll-fx.js` gives it
+    a gentle parallax — its own `transform: translateY()` (never a
+    layout property) moves at 50% of scroll speed, clamped so it can
+    never outrun the layer's 60vh buffer and reveal an edge, however long
+    the page — for a subtle sense of depth; static (no parallax) under
+    `prefers-reduced-motion`.
   - The token **symbol**, where it appears in the result card title, is
     a small `.token-symbol-tag` — JetBrains Mono, accent blue, CSS
     `::before`/`::after` brackets — read as a "locked-on" target ID.
     Restrained to that one spot; not a new badge shape reused elsewhere.
+  - **One deliberate scroll moment, on `index.html` only**, in place of
+    the generic-AI-page habit of fading/sliding every section in as it's
+    scrolled to — nothing on this site animates in on scroll except this:
+    a dot-and-dash mark (the same marker a signal-list finding uses)
+    travels once across a hairline divider between the Network status
+    and Scan a token cards, via an `IntersectionObserver` that fires the
+    first time that divider enters view and then disconnects — it never
+    replays on scroll up/down. Every other section, card, and finding
+    row is simply present, not animated in, when scrolled to; that's a
+    deliberate choice, not an oversight. Skipped entirely under
+    `prefers-reduced-motion`.
 - **Focus states** — every interactive element (links, buttons, the
   address input, `<summary>` disclosures) gets the same visible
   `:focus-visible` outline in the brand accent blue (a raw contrast
@@ -547,6 +564,7 @@ faq.html             # content page — see "Pages" below
 disclaimer.html      # content page — see "Pages" below
 style.css            # styling for every page above (mobile-first, light theme)
 nav.js                # shared header hamburger-nav toggle, loaded by every page
+scroll-fx.js          # background parallax (every page) + the one scroll-sweep moment (index.html), see Design
 app.js               # app logic for index.html only (ES module, imports viem utils + scoring.js)
 scoring.js           # Risk Score v1 — pure, rule-based scoring + ABI helpers
 tests/scoring.test.js  # unit tests for scoring.js (node --test)
