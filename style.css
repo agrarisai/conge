@@ -1204,8 +1204,18 @@ input[type="text"]::placeholder {
   color: var(--color-slate);
 }
 
+/* Both of these are inline text links sitting in a sentence of slate
+   fine print, not a standalone nav-style link list (like .footer-links
+   below) — so, unlike those, they need a real link affordance (accent
+   color + underline), not just a layout cue, to read as clickable
+   rather than as plain emphasized text. */
+.footer-fine-print a,
+.footer-disclaimer-short a {
+  color: var(--color-accent-text);
+  text-decoration: underline;
+}
+
 .footer-fine-print a {
-  color: inherit;
   font-weight: 500;
 }
 
