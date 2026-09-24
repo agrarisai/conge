@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://agrarisai.github.io/conge/sitemap.xml
