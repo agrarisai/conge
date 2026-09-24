@@ -578,6 +578,32 @@ disclaimer. Both the header and footer reuse the same `style.css` tokens
 as the redesign — no new colors, fonts, or spacing scale introduced for
 these pages.
 
+## SEO
+
+Each page has its own `<title>` and a 150–160 character
+`<meta name="description">` — plain and factual, describing what's
+actually on that page rather than a repeated site-wide tagline or any
+claim the page itself doesn't back up. Every page also has:
+
+- A `<link rel="canonical">` pointing at its own real URL under
+  `https://agrarisai.github.io/conge/`.
+- Open Graph (`og:type=website`, `og:site_name`, `og:title`,
+  `og:description`, `og:url`, `og:image` + dimensions) and Twitter Card
+  (`summary_large_image`, matching title/description/image) tags, all
+  page-specific rather than copied from `index.html`. `og:title`/
+  `twitter:title` always match `<title>`, and `og:description`/
+  `twitter:description` always match the meta description — one source
+  of truth per page, not two copies that can drift apart. `og:image`/
+  `twitter:image` both point at the same absolute URL,
+  `assets/social-preview-1200x630.png` (the existing social-preview
+  asset — no new image was added).
+
+At the repo root, `robots.txt` allows all crawling and points at
+`sitemap.xml`, which lists all five pages' absolute URLs (`lastmod` set
+to each page's actual last-touched date, not a guess). Both are plain
+static files — nothing generates them, so if a page is ever added,
+renamed, or removed, `sitemap.xml` needs updating by hand alongside it.
+
 ## Project structure
 
 ```
@@ -592,6 +618,8 @@ scroll-fx.js          # background parallax (every page) + the one scroll-sweep 
 app.js               # app logic for index.html only (ES module, imports viem utils + scoring.js)
 scoring.js           # Risk Score v1 — pure, rule-based scoring + ABI helpers
 tests/scoring.test.js  # unit tests for scoring.js (node --test)
+robots.txt           # allows all crawling, points to sitemap.xml — see "SEO" below
+sitemap.xml           # all five pages' absolute URLs — see "SEO" below
 assets/              # brand imagery — see "Branding assets" below
 worker/              # Cloudflare Worker RPC proxy — see "Worker" below
   index.js             # the Worker itself (single file, no dependencies)
