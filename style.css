@@ -1263,50 +1263,75 @@ input[type="text"]::placeholder {
 
 /* --- Footer ---------------------------------------------------------- */
 
+/* One small spacing scale, reused for every gap in the footer so the
+   blocks share a single rhythm: 0.5 / 1 / 1.5 / 2.5rem. Opaque ivory
+   background, like the header, so the page-wide .bg-rings texture
+   (z-index: -1) never shows behind footer text. Contrast on ivory:
+   ink 17.9:1, slate 5.5:1, --color-accent-text 5.5:1 — all clear AA. */
 .site-footer {
-  margin-top: 1.5rem;
-  padding: 2rem var(--spacing) 1.5rem;
+  --footer-space-1: 0.5rem;
+  --footer-space-2: 1rem;
+  --footer-space-3: 1.5rem;
+  --footer-space-4: 2.5rem;
+  /* Soft slate-tinted hairline — low-contrast divider, not black. */
+  --footer-rule: rgb(99 102 95 / 22%);
+
+  margin-top: var(--footer-space-4);
+  padding: var(--footer-space-4) var(--spacing) var(--footer-space-3);
+  background-color: var(--color-bg);
   border-top: 1px solid var(--color-border);
-  font-size: 0.85rem;
+  font-size: 0.875rem;
+  line-height: 1.55;
 }
 
 .footer-grid {
   max-width: 640px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 1.5rem;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: var(--footer-space-3);
+  row-gap: var(--footer-space-2);
 }
 
+/* Brand block always leads, full width, with extra room beneath it
+   (row-gap + this margin = the largest step on the scale). */
 .footer-col-brand {
   grid-column: 1 / -1;
+  margin-bottom: var(--footer-space-3);
 }
 
 .footer-brand {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--footer-space-1);
   font-family: var(--font-heading);
   font-weight: 600;
-  font-size: 1.05rem;
+  font-size: 1.125rem;
+  line-height: 1.2;
+  color: var(--color-ink);
 }
 
 .footer-desc {
-  margin: 0.6rem 0 0;
+  margin: var(--footer-space-2) 0 0;
   color: var(--color-slate);
-  max-width: 34ch;
+  max-width: 38ch;
 }
 
 .footer-disclaimer-short {
-  margin: 0.5rem 0 0;
-  font-size: 0.8rem;
+  margin: var(--footer-space-1) 0 0;
+  font-size: 0.8125rem;
   color: var(--color-slate);
+  max-width: 48ch;
 }
 
+/* Quiet group label: slate, sentence case, medium weight, no tracking. */
 .footer-col-heading {
-  margin: 0 0 0.6rem;
-  font-size: 0.75rem;
-  font-weight: 600;
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--color-slate);
 }
 
@@ -1314,48 +1339,65 @@ input[type="text"]::placeholder {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
 }
 
-.site-footer a {
+/* Each link is its own 44px-tall tap target; the vertical padding that
+   builds it also spaces the list, so the items need no extra gap. */
+.footer-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   color: var(--color-ink);
   font-weight: 500;
   text-decoration: none;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
 }
 
-.site-footer a:hover {
-  text-decoration: underline;
+/* Hover/focus: a blue accent underline; keyboard focus also gets the
+   site-wide a:focus-visible ring defined under Focus states. */
+.footer-links a:hover,
+.footer-links a:focus-visible {
+  text-decoration-line: underline;
+  text-decoration-color: var(--color-accent);
 }
 
 .footer-fine-print {
   max-width: 640px;
-  margin: 1.75rem auto 0;
-  padding-top: 1.25rem;
-  border-top: 1px solid var(--color-border);
-  font-size: 0.78rem;
+  margin: var(--footer-space-2) auto 0;
+  padding-top: var(--footer-space-3);
+  border-top: 1px solid var(--footer-rule);
+  font-size: 0.8125rem;
+  line-height: 1.6;
   color: var(--color-slate);
+  overflow-wrap: break-word;
+  text-wrap: pretty;
+}
+
+/* Keeps short proper names like "Robinhood Markets, Inc." on one line
+   so the fine print never strands "Inc." at the start of a line. */
+.footer-nowrap {
+  white-space: nowrap;
 }
 
 /* Both of these are inline text links sitting in a sentence of slate
    fine print, not a standalone nav-style link list (like .footer-links
-   below) — so, unlike those, they need a real link affordance (accent
+   above) — so, unlike those, they need a real link affordance (accent
    color + underline), not just a layout cue, to read as clickable
    rather than as plain emphasized text. */
 .footer-fine-print a,
 .footer-disclaimer-short a {
   color: var(--color-accent-text);
-  text-decoration: underline;
-}
-
-.footer-fine-print a {
   font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-@media (min-width: 480px) {
+/* Two link groups side by side once there's comfortable room (~360px);
+   stacked on anything narrower. */
+@media (min-width: 360px) {
   .footer-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
