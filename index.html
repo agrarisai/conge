@@ -148,6 +148,7 @@
             placeholder="0x…"
             required
           />
+          <button id="example-scan-button" type="button" class="text-button">Try an example (USDG)</button>
         </div>
         <p id="address-error" class="error-message" hidden></p>
         <button type="submit" class="primary-button" id="scan-button">
@@ -159,10 +160,16 @@
       <div id="scan-result" class="result-card" hidden>
         <div class="result-card-header">
           <h3 id="scan-result-title">Token</h3>
-          <button id="rescan-button" type="button" class="secondary-button">
-            <span class="button-busy-dot" aria-hidden="true"></span>
-            <span id="rescan-button-label">Rescan</span>
-          </button>
+          <div class="result-card-actions">
+            <button id="copy-link-button" type="button" class="secondary-button">
+              <span id="copy-link-button-label">Copy link</span>
+            </button>
+            <button id="rescan-button" type="button" class="secondary-button">
+              <span class="button-busy-dot" aria-hidden="true"></span>
+              <span id="rescan-button-label">Rescan</span>
+            </button>
+          </div>
+          <span id="copy-link-status" class="visually-hidden" role="status" aria-live="polite"></span>
         </div>
 
         <div id="risk-summary" class="risk-summary">
