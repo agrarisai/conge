@@ -883,6 +883,21 @@ const resultVolumeEl = document.getElementById("result-volume");
 const resultMarketCapEl = document.getElementById("result-market-cap");
 const resultSourceEl = document.getElementById("result-source");
 
+const exampleScanButton = document.getElementById("example-scan-button");
+const copyLinkButton = document.getElementById("copy-link-button");
+const copyLinkButtonLabelEl = document.getElementById("copy-link-button-label");
+const copyLinkStatusEl = document.getElementById("copy-link-status");
+
+// The one example token behind "Try an example (USDG)". Deliberately a
+// single, well-known stablecoin — never a "bad token" example, which
+// would permanently single out a specific small project on a public page.
+const EXAMPLE_TOKEN_ADDRESS = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
+
+// Query parameter carrying the scanned address in shareable links
+// (e.g. ?address=0x…). The page's canonical/og:url tags stay the plain
+// page URL — only the shareable link itself carries this.
+const ADDRESS_PARAM = "address";
+
 const UNAVAILABLE = "Unavailable";
 const PENDING_LABEL = "Checking…";
 
@@ -896,6 +911,7 @@ const PENDING_LABEL = "Checking…";
 function setScanBusy(isBusy) {
   scanButton.disabled = isBusy;
   rescanButton.disabled = isBusy;
+  exampleScanButton.disabled = isBusy;
   scanButtonLabelEl.textContent = isBusy ? "Scanning…" : "Scan";
   rescanButtonLabelEl.textContent = isBusy ? "Scanning…" : "Rescan";
 }
@@ -1353,6 +1369,8 @@ async function scanToken(rawAddress) {
   if (!isAddress(trimmed)) {
     addressErrorEl.textContent = "Enter a valid EVM address (0x followed by 40 hex characters).";
     addressErrorEl.hidden = false;
+    // Never leave the URL pointing at a previous, different token.
+    updateShareableUrl(null);
     return;
   }
 
@@ -1580,6 +1598,110 @@ async function scanToken(rawAddress) {
     renderRiskLevelFinal(overallLevel);
   } finally {
     setScanBusy(false);
+    // The scan has finished — with a result, or with a clear error such
+    // as "this is a wallet address" — so the current URL now reproduces
+    // it. Covers every exit path of the try block above.
+    updateShareableUrl(address);
+  }
+}
+
+// --- Shareable scan links -------------------------------------------------
+
+// The current page URL with ?address= set to `address` (or removed, for
+// null). Other query params are kept; the #hash is dropped.
+function buildShareableUrl(address) {
+  const url = new URL(window.location.href);
+  url.hash = "";
+  if (address) {
+    url.searchParams.set(ADDRESS_PARAM, address);
+  } else {
+    url.searchParams.delete(ADDRESS_PARAM);
+  }
+  return url.toString();
+}
+
+// Rewrites the address bar in place — replaceState, not pushState, so
+// scanning several tokens doesn't pile up Back-button entries, and no
+// reload or network request is triggered.
+function updateShareableUrl(address) {
+  const next = buildShareableUrl(address);
+  if (next !== window.location.href) {
+    history.replaceState(history.state, "", next);
+  }
+}
+
+// The address from a shared link, if present and well-formed. A malformed
+// value is ignored silently (null): the visitor didn't type it, so it
+// shouldn't produce an error — the page just shows its normal empty state.
+function addressFromUrl() {
+  const value = new URLSearchParams(window.location.search).get(ADDRESS_PARAM);
+  if (!value) return null;
+  const trimmed = value.trim();
+  return isAddress(trimmed) ? trimmed : null;
+}
+
+async function copyTextToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Older browsers / non-secure contexts: the legacy execCommand route.
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch {
+      ok = false;
+    }
+    textarea.remove();
+    return ok;
+  }
+}
+
+const COPY_LINK_LABEL = "Copy link";
+const COPY_LINK_CONFIRM_MS = 2000;
+let copyLinkResetTimer = null;
+
+// Briefly swaps the button's own label (e.g. "Copied") instead of an
+// alert(), and announces the same via the polite live region.
+function flashCopyLinkLabel(label, announcement) {
+  clearTimeout(copyLinkResetTimer);
+  copyLinkButtonLabelEl.textContent = label;
+  copyLinkStatusEl.textContent = announcement;
+  copyLinkResetTimer = setTimeout(() => {
+    copyLinkButtonLabelEl.textContent = COPY_LINK_LABEL;
+    copyLinkStatusEl.textContent = "";
+  }, COPY_LINK_CONFIRM_MS);
+}
+
+// Native share sheet on touch devices that support the Web Share API;
+// clipboard copy everywhere else (and if sharing fails for any reason
+// other than the user dismissing the sheet).
+async function shareScanLink() {
+  if (!lastScannedTokenAddress) return;
+  const url = buildShareableUrl(lastScannedTokenAddress);
+
+  const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
+  if (typeof navigator.share === "function" && isTouchDevice) {
+    try {
+      await navigator.share({ title: document.title, url });
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+    }
+  }
+
+  const copied = await copyTextToClipboard(url);
+  if (copied) {
+    flashCopyLinkLabel("Copied", "Link copied to clipboard.");
+  } else {
+    flashCopyLinkLabel("Couldn't copy", "Couldn't copy the link. Copy it from the address bar instead.");
   }
 }
 
@@ -1598,6 +1720,24 @@ rescanButton.addEventListener("click", () => {
   }
 });
 
+copyLinkButton.addEventListener("click", () => {
+  shareScanLink();
+});
+
+// Fills the input and scans straight away — exactly as if the address
+// had been pasted and Scan tapped.
+exampleScanButton.addEventListener("click", () => {
+  tokenAddressInput.value = EXAMPLE_TOKEN_ADDRESS;
+  scanToken(EXAMPLE_TOKEN_ADDRESS);
+});
+
 // --- Init ---------------------------------------------------------------
 
 checkNetworkStatus();
+
+// A shared scan link (?address=0x…) reproduces its scan immediately.
+const sharedAddress = addressFromUrl();
+if (sharedAddress) {
+  tokenAddressInput.value = sharedAddress;
+  scanToken(sharedAddress);
+}
