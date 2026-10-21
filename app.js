@@ -21,6 +21,7 @@ import {
   encodeTransferCallData,
   decodeAddressResult,
   decodeTransferOutcome,
+  THRESHOLDS,
 } from "./scoring.js";
 
 // Cloudflare Worker RPC proxy (see worker/) — a thin, read-only JSON-RPC
@@ -1160,6 +1161,14 @@ function isBenignNotFound(result) {
   return Boolean(result) && !result.ok && result.status === 404;
 }
 
+// Diagnostics of the given Blockscout results that genuinely failed
+// (timeout, network, 5xx, bad JSON) — not an expected 404 "not found" —
+// marked ok: false for the Technical details panel. Null if none failed.
+function failedDiagnostics(...results) {
+  const failed = results.filter((r) => r && !r.ok && !isBenignNotFound(r));
+  return failed.length ? failed.map((r) => ({ ...r.diagnostic, ok: false })) : null;
+}
+
 // A link to this address on the block explorer, built with
 // createElement/textContent only (never innerHTML — address strings come
 // from Blockscout/Worker data).
@@ -1438,7 +1447,10 @@ function buildFindingRow(f, groupKey, sellSimulation) {
     body.appendChild(buildSellSimulationEvidence(sellSimulation));
   }
 
-  if ((f.id === "owner-status" || f.id === "sell-simulation") && f.diagnostics?.length) {
+  // Any "unknown" finding whose data source failed carries that request's
+  // diagnostics (owner/sell-simulation via the Worker; verification, token
+  // age and owner privileges via Blockscout) — shown under that row.
+  if (f.diagnostics?.length) {
     const techPanel = buildFindingTechnicalDetails(f.diagnostics);
     if (techPanel) body.appendChild(techPanel);
   }
@@ -1709,15 +1721,21 @@ async function scanToken(rawAddress) {
       Promise.all([contractPromise, addressPromise]).then(() => resolve(null));
     });
 
-    const verificationCheck = verificationPromise.then((isVerified) => {
+    const verificationCheck = verificationPromise.then(async (isVerified) => {
+      // Unknown only once both sources have answered; say which failed.
+      const diagnostics =
+        isVerified === null ? failedDiagnostics(...(await Promise.all([contractPromise, addressPromise]))) : null;
       if (isCurrentScan()) timer.mark("Check ready: contract verification");
-      return { isVerified, findings: [scoreVerification(isVerified)] };
+      return { isVerified, findings: [scoreVerification(isVerified, diagnostics)] };
     });
 
-    const ageCheck = txPromise.then((txResult) => {
+    const ageCheck = txPromise.then(async (txResult) => {
       const createdAtIso = txResult?.ok ? (txResult.body.timestamp ?? null) : null;
+      // Missing because /addresses or the /transactions follow-up failed —
+      // as opposed to Blockscout simply having no creation tx on record.
+      const diagnostics = createdAtIso ? null : failedDiagnostics(await addressPromise, txResult);
       if (isCurrentScan()) timer.mark("Check ready: token age");
-      return [scoreTokenAge(createdAtIso)];
+      return [scoreTokenAge(createdAtIso, new Date(), THRESHOLDS, diagnostics)];
     });
 
     const ownerPrivilegesCheck = Promise.all([contractPromise, proxyAdminPromise, verificationPromise]).then(
@@ -1739,7 +1757,14 @@ async function scanToken(rawAddress) {
             ? proxyAdminResult.body.is_contract
             : undefined;
         if (isCurrentScan()) timer.mark("Check ready: owner privileges");
-        return scoreOwnerPrivileges({ isVerified, abi, isProxy, proxyAdmin, proxyAdminIsContract });
+        return scoreOwnerPrivileges({
+          isVerified,
+          abi,
+          isProxy,
+          proxyAdmin,
+          proxyAdminIsContract,
+          abiDiagnostics: failedDiagnostics(contractResult),
+        });
       },
     );
 
