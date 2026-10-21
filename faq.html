@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Conge FAQ</title>
-  <meta name="description" content="Common questions about Conge: financial advice, wallet access, why a scan sometimes says Unknown, Robinhood affiliation, and how risk level is decided." />
+  <meta name="description" content="Common questions about Conge: financial advice, wallet access, why a check sometimes says Unknown, the short cooldown after a scan, which addresses it can scan, Robinhood affiliation, and how risk level is decided." />
   <link rel="canonical" href="https://agrarisai.github.io/conge/faq.html" />
 
   <link rel="icon" href="assets/favicon-512.png" type="image/png" sizes="512x512" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Conge" />
   <meta property="og:title" content="Conge FAQ" />
-  <meta property="og:description" content="Common questions about Conge: financial advice, wallet access, why a scan sometimes says Unknown, Robinhood affiliation, and how risk level is decided." />
+  <meta property="og:description" content="Common questions about Conge: financial advice, wallet access, why a check sometimes says Unknown, the short cooldown after a scan, which addresses it can scan, Robinhood affiliation, and how risk level is decided." />
   <meta property="og:url" content="https://agrarisai.github.io/conge/faq.html" />
   <meta property="og:image" content="https://agrarisai.github.io/conge/assets/social-preview-1200x630.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
 
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Conge FAQ" />
-  <meta name="twitter:description" content="Common questions about Conge: financial advice, wallet access, why a scan sometimes says Unknown, Robinhood affiliation, and how risk level is decided." />
+  <meta name="twitter:description" content="Common questions about Conge: financial advice, wallet access, why a check sometimes says Unknown, the short cooldown after a scan, which addresses it can scan, Robinhood affiliation, and how risk level is decided." />
   <meta name="twitter:image" content="https://agrarisai.github.io/conge/assets/social-preview-1200x630.png" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -95,12 +95,57 @@
         <details class="faq-item">
           <summary>Why does a scan sometimes say "Unknown"?</summary>
           <p>
-            Usually the shared public RPC that Conge's Worker relays through is rate-limited —
-            it's a third-party endpoint shared by everyone using this chain, and it has a tight
-            limit. Conge already retries automatically, at both the Worker and the app level, but
-            under load a check can still come back "Unknown" rather than a real result. This is
-            expected, not a bug — the finding says so directly, and clicking <strong>Rescan</strong>
-            a little later usually goes through.
+            Because Conge would rather say it couldn't check something than guess. An Unknown
+            check never counts toward the risk level — not as a red flag, and never as a pass —
+            and each one says why. The usual reasons:
+          </p>
+          <p>
+            <strong>The shared public RPC is rate-limited.</strong> The owner and sell-simulation
+            checks read the chain through a public RPC endpoint shared by everyone using this
+            chain, and it has a tight limit. Conge already retries automatically, at both the
+            Worker and the app level, but under load these checks can still come back as "Sell
+            simulation could not complete" or "Owner unknown". That's a known limitation, not an
+            error in Conge.
+          </p>
+          <p>
+            <strong>The block explorer is slow.</strong> Under load, some Blockscout lookups —
+            contract verification and deployment time especially — can take several seconds. Each
+            one gets 10 seconds; if it doesn't answer in time (or returns an error), the checks that
+            depend on it say the block explorer couldn't be read, with the failed request under
+            <strong>Technical details</strong>.
+          </p>
+          <p>
+            <strong>There's nothing to check.</strong> Some Unknowns aren't failures at all: owner
+            privileges can't be read when the source isn't verified, and a sell can't be simulated
+            when no liquidity pool turns up among the top holders.
+          </p>
+          <p>
+            For the first two, tapping <strong>Rescan</strong> a little later usually goes
+            through.
+          </p>
+        </details>
+
+        <details class="faq-item">
+          <summary>Why is the Scan button greyed out for a few seconds after a scan?</summary>
+          <p>
+            After every scan, the Scan and Rescan buttons pause for 3 seconds and count down
+            ("Scan again in 3s"). The owner and sell-simulation checks share one public RPC with
+            everyone else on this chain, and it has a tight rate limit; a short pause keeps
+            quick repeat taps from flooding it — which would only make your next scan, and
+            everyone else's, more likely to come back Unknown. Nothing is wrong, and the buttons
+            come back on their own.
+          </p>
+        </details>
+
+        <details class="faq-item">
+          <summary>Why won't Conge scan a particular address?</summary>
+          <p>
+            Conge only scores tokens. If the address is a wallet (no contract code), or a contract
+            that isn't a standard token — a router, a liquidity pool, or anything else without a
+            token name, symbol, and decimals — it says so and stops, rather than showing a risk
+            level that wouldn't mean anything. Double-check you copied the token's own contract
+            address. If the block explorer couldn't confirm what the address is right then, Conge
+            says that instead; trying again a moment later usually works.
           </p>
         </details>
 
@@ -117,18 +162,20 @@
           <summary>Is the code open source?</summary>
           <p>
             No — the repository is private right now. You don't have to take that on
-            faith, though: everything Conge does runs in your own browser against
-            public Blockscout and RPC data, so you can open your browser's network
-            tab and watch exactly what it requests and where.
+            faith, though: everything Conge does runs in your own browser, reading public
+            Blockscout data and, through its read-only Worker relay, the chain's public RPC
+            — so you can open your browser's network tab and watch exactly what it requests
+            and where.
           </p>
         </details>
 
         <details class="faq-item">
           <summary>How is risk level decided?</summary>
           <p>
-            By a fixed set of transparent, rule-based checks — no model, no hidden scoring. See
-            <a href="how-it-works.html">how it works</a> for the full list of checks and what
-            each one means.
+            By a fixed set of transparent, rule-based checks — no model, no hidden scoring. The
+            overall level is the worst result among the checks that actually produced data. See
+            <a href="how-it-works.html">how it works</a> for the full list of checks, their exact
+            thresholds, and what each level means.
           </p>
         </details>
 

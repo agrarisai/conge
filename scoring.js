@@ -786,7 +786,7 @@ export function scoreSellSimulation(simulation) {
     severity: SEVERITY.INFO,
     title: "Sell simulation passed",
     detail:
-      "A simulated transfer to both an ordinary address and a detected liquidity pool succeeded. This is an indicator, not a guarantee — it can't detect every trap (see the limits noted in the README).",
+      "A simulated transfer to both an ordinary address and a detected liquidity pool succeeded. This is an indicator, not a guarantee — it can't detect every trap (see “What Conge cannot detect” on the How it works page).",
   });
 }
 
