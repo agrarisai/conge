@@ -179,12 +179,16 @@ summary:focus-visible {
   border-bottom: 1px solid var(--color-border);
 }
 
+/* Pinned to the left edge, not centred: the hamburger sits flush
+   against the header's left padding, then the logo mark and the
+   wordmark follow with one consistent 12px gap, and any spare space
+   falls on the right. (This used to be a max-width: 640px column with
+   margin: 0 auto, which centred the whole group on wider screens.) */
 .header-inner {
   display: flex;
   align-items: center;
-  gap: 0.7rem;
-  max-width: 640px;
-  margin: 0 auto;
+  justify-content: flex-start;
+  gap: 0.75rem;
 }
 
 .logo {
@@ -322,8 +326,8 @@ summary:focus-visible {
 }
 
 /* --- Nav overlay + panel -------------------------------------------------
-   A full-height panel that slides in from the right over a dimmed
-   overlay, in place of a compact dropdown — same ivory/ink/accent
+   A full-height panel that slides in from the left — the same side as
+   the hamburger that opens it — over a dimmed overlay, in place of a compact dropdown — same ivory/ink/accent
    tokens as the rest of the site, not a generic drawer component. */
 
 .nav-overlay {
@@ -346,7 +350,7 @@ summary:focus-visible {
 .nav-panel {
   position: fixed;
   top: 0;
-  right: 0;
+  left: 0;
   z-index: 41;
   display: flex;
   flex-direction: column;
@@ -355,9 +359,9 @@ summary:focus-visible {
   height: 100vh;
   height: 100dvh;
   background-color: var(--color-bg);
-  border-left: 1px solid var(--color-border);
+  border-right: 1px solid var(--color-border);
   overflow-y: auto;
-  transform: translateX(100%);
+  transform: translateX(-100%);
   transition: transform 0.22s ease;
 }
 

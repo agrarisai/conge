@@ -544,8 +544,8 @@ them, so none of its DOM lookups apply). Like every page, they do load
   in one.
 
 **Navigation** is identical on every page: a hamburger button on the
-right of the header, next to the logo/wordmark, that opens a full-height
-panel sliding in from the right over a dimmed overlay (Home, How it
+left of the header, just before the logo/wordmark, that opens a full-height
+panel sliding in from the left over a dimmed overlay (Home, How it
 works, About, FAQ — `disclaimer.html` is reachable from the footer, not
 this menu, matching how it's referenced elsewhere), rather than a small
 dropdown. The panel has its own header row ("Menu" in the site's
