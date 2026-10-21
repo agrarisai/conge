@@ -629,7 +629,7 @@ sitemap.xml           # all five pages' absolute URLs — see "SEO" below
 assets/              # brand imagery — see "Branding assets" below
 worker/              # Cloudflare Worker RPC proxy — see "Worker" below
   index.js             # the Worker itself (single file, no runtime dependencies)
-  wrangler.toml        # deploy config for Workers Builds (Git-connected auto-deploy)
+  wrangler.toml        # optional Wrangler config, for deploying from a terminal (the Worker is normally deployed via the dashboard editor)
   package.json         # wrangler as a devDependency + "deploy"/"test" scripts (with package-lock.json)
   README.md            # deploy steps, /health, rate limiting
   tests/worker.test.js # unit tests for its validation/CORS logic (node --test)
@@ -680,8 +680,8 @@ Open Graph / Twitter card URLs and image, `sitemap.xml`, and the
 `Sitemap:` line in `robots.txt` all point at `https://conge.site/…` (see
 [SEO](#seo) and [Branding assets](#branding-assets)). The original
 `https://agrarisai.github.io/conge/` address still resolves — GitHub Pages
-redirects it to the custom domain — and the Worker still accepts that
-origin, but it's no longer declared anywhere as the site's URL. If you
+redirects it to the custom domain — but it's no longer declared anywhere
+as the site's URL, and the Worker no longer accepts it as an origin. If you
 fork this repo or move the site again, update those absolute URLs (and
 `CNAME`) to the new address.
 
@@ -961,9 +961,9 @@ above for why that endpoint can fail from some networks). It:
   field is validated and forwarded untouched, which the owner check and
   the sell-simulation honeypot check both rely on;
 - validates addresses/call data as hex before forwarding;
-- only accepts requests from the site's own origins —
-  `https://agrarisai.github.io`, `https://conge.site` and
-  `https://www.conge.site` — enforced server-side, with no wildcard CORS;
+- only accepts requests from the site's own origins — `https://conge.site`
+  and `https://www.conge.site` — enforced server-side, with no wildcard
+  CORS;
 - **retries a rate-limited or overloaded upstream call** (HTTP `429`/`503`
   from `rpc.mainnet.chain.robinhood.com` — the RPC has a tight shared
   rate limit, and a full scan's burst of sequential calls can trip it) up
@@ -1027,8 +1027,7 @@ works fine in a browser tab, use these in order:
      above).
    - `origin-rejected` — the request reached the Worker, which returned
      `403` because the `Origin` header wasn't one of the site's allowed
-     origins (`https://agrarisai.github.io`, `https://conge.site`,
-     `https://www.conge.site`).
+     origins (`https://conge.site`, `https://www.conge.site`).
    - `validation-rejected` — the request reached the Worker, which
      rejected it as malformed or oversized (`400`/`413`) — a bug in the
      request, not a CORS problem.
@@ -1064,11 +1063,11 @@ scenario these tests (and manual code review) could construct.
 Since the code checks out but the live symptom is real, the most likely
 explanations are outside this file:
 - **The live deployment may not exactly match this repository's
-  `worker/index.js`.** The Worker deploys from `main` via Cloudflare Workers
-  Builds, but a manual dashboard edit, or a merge whose build failed, can
-  leave it out of sync. Check the Worker's **Deployments** tab in the
-  Cloudflare dashboard for the latest build. As a precaution, use **Retry
-  build** there to redeploy `main` — see
+  `worker/index.js`.** The Worker is deployed by hand: its code is pasted
+  into the Cloudflare dashboard editor, and merging a PR doesn't update it.
+  So it's easy for the live copy to lag behind `main`. As a precaution,
+  re-paste the current `worker/index.js` into **Workers & Pages →
+  `conge-rpc` → Edit code** and click **Deploy** — see
   [`worker/README.md`](./worker/README.md) → "Deploying". This is harmless
   either way: if the live code already matched, redeploying changes
   nothing.

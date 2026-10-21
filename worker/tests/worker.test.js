@@ -24,7 +24,7 @@ import worker, {
   resetHealthCache,
 } from "../index.js";
 
-const SITE_ORIGIN = "https://agrarisai.github.io";
+const SITE_ORIGIN = "https://conge.site";
 const WORKER_URL = "https://rpc.conge.site/";
 
 const VALID_ADDRESS = "0x1234567890123456789012345678901234567890";
@@ -33,7 +33,7 @@ const OTHER_ADDRESS = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
 // --- Config sanity -----------------------------------------------------
 
 test("ALLOWED_ORIGINS is exactly the site's origins, no wildcard", () => {
-  assert.deepEqual(ALLOWED_ORIGINS, ["https://agrarisai.github.io", "https://conge.site", "https://www.conge.site"]);
+  assert.deepEqual(ALLOWED_ORIGINS, ["https://conge.site", "https://www.conge.site"]);
 });
 
 test("ALLOWED_METHODS is exactly the four read-only methods", () => {
@@ -42,10 +42,11 @@ test("ALLOWED_METHODS is exactly the four read-only methods", () => {
 
 // --- CORS ----------------------------------------------------------------
 
-test("isAllowedOrigin: only the configured origin passes", () => {
-  assert.equal(isAllowedOrigin("https://agrarisai.github.io"), true);
+test("isAllowedOrigin: only the configured origins pass", () => {
+  // The old GitHub Pages origin is no longer allowed since the move to conge.site.
+  assert.equal(isAllowedOrigin("https://agrarisai.github.io"), false);
+  assert.equal(isAllowedOrigin("http://agrarisai.github.io"), false);
   assert.equal(isAllowedOrigin("https://evil.example"), false);
-  assert.equal(isAllowedOrigin("http://agrarisai.github.io"), false); // wrong scheme
   assert.equal(isAllowedOrigin("https://conge.site"), true);
   assert.equal(isAllowedOrigin("https://www.conge.site"), true);
   assert.equal(isAllowedOrigin("http://conge.site"), false); // wrong scheme
@@ -58,9 +59,9 @@ test("isAllowedOrigin: only the configured origin passes", () => {
 });
 
 test("buildCorsHeaders: allowed origin gets echoed back with no wildcard anywhere", () => {
-  const headers = buildCorsHeaders("https://agrarisai.github.io");
+  const headers = buildCorsHeaders("https://conge.site");
   assert.ok(headers);
-  assert.equal(headers["Access-Control-Allow-Origin"], "https://agrarisai.github.io");
+  assert.equal(headers["Access-Control-Allow-Origin"], "https://conge.site");
   for (const value of Object.values(headers)) {
     assert.doesNotMatch(String(value), /\*/, "no header value should contain a wildcard");
   }
@@ -443,20 +444,19 @@ const FORGED_ORIGINS = [
   ["no Origin header at all (curl's default)", null],
   ['the literal "null" origin (sandboxed iframes, file://)', "null"],
   ["an unrelated site", "https://evil.example"],
-  ["the right host over http", "http://agrarisai.github.io"],
-  ["a look-alike suffix domain", "https://agrarisai.github.io.evil.example"],
-  ["a look-alike prefix domain", "https://evil-agrarisai.github.io"],
+  ["the old GitHub Pages origin (no longer allowed)", "https://agrarisai.github.io"],
+  ["the old GitHub Pages origin over http", "http://agrarisai.github.io"],
   ["a different GitHub Pages user", "https://someone-else.github.io"],
-  ["the right origin with a trailing slash", "https://agrarisai.github.io/"],
-  ["the right origin with a path", "https://agrarisai.github.io/conge"],
-  ["the right origin with a port", "https://agrarisai.github.io:443"],
-  ["different letter case", "https://AgrarisAI.github.io"],
   ["a localhost dev origin", "http://localhost:8080"],
-  ["the custom domain over http", "http://conge.site"],
-  ["an unlisted subdomain of the custom domain", "https://evil.conge.site"],
+  ["the right host over http", "http://conge.site"],
+  ["a look-alike suffix domain", "https://conge.site.evil.example"],
+  ["a look-alike prefix domain", "https://evil-conge.site"],
+  ["an unlisted subdomain", "https://evil.conge.site"],
   ["the Worker's own custom domain", "https://rpc.conge.site"],
-  ["a look-alike of the custom domain", "https://conge.site.evil.example"],
-  ["the custom domain with a trailing slash", "https://conge.site/"],
+  ["the right origin with a trailing slash", "https://conge.site/"],
+  ["the right origin with a path", "https://conge.site/index.html"],
+  ["the right origin with a port", "https://conge.site:443"],
+  ["different letter case", "https://Conge.site"],
 ];
 
 for (const [label, forgedOrigin] of FORGED_ORIGINS) {
@@ -506,7 +506,7 @@ test("forged origin: a POST that looks like a browser's (Referer, Sec-Fetch-*, U
       method: "POST",
       headers: {
         Origin: "https://evil.example",
-        Referer: "https://agrarisai.github.io/conge/",
+        Referer: "https://conge.site/",
         "Sec-Fetch-Site": "cross-site",
         "Sec-Fetch-Mode": "cors",
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
