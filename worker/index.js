@@ -24,8 +24,10 @@
 const UPSTREAM_RPC = "https://rpc.mainnet.chain.robinhood.com";
 
 // No wildcard — only this site may call the RPC-proxy endpoints. (Does
-// NOT apply to GET /health — see handleHealth below for why.)
-export const ALLOWED_ORIGINS = ["https://agrarisai.github.io"];
+// NOT apply to GET /health — see handleHealth below for why.) Exact
+// origins only: the original GitHub Pages address, kept while the site
+// moves, plus the custom domain with and without www.
+export const ALLOWED_ORIGINS = ["https://agrarisai.github.io", "https://conge.site", "https://www.conge.site"];
 
 // Read-only methods only. Nothing here can move funds, change state, or
 // sign anything.
