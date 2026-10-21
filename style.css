@@ -473,7 +473,7 @@ main {
    a dot-and-dash mark — the exact marker used for a signal-list finding
    (see .finding-marker) — travels across a hairline track between the
    hero and the scan section. Not applied to any other section.
-   scroll-fx.js replays this same single 1.2s animation every ~4s while
+   scroll-fx.js replays this same single 2.4s animation every ~3.2s while
    the track is on screen (IntersectionObserver), and stops it entirely
    while it's off-screen or the tab is hidden.
    --sweep-distance is set by scroll-fx.js to the track's actual measured
@@ -517,7 +517,8 @@ main {
 }
 
 .scroll-sweep.is-active .scroll-sweep-mark {
-  animation: scroll-sweep-move 1.2s ease-out forwards;
+  /* 2.4s: an unhurried, deliberate glide rather than a quick flick. */
+  animation: scroll-sweep-move 2.4s ease-out forwards;
 }
 
 @keyframes scroll-sweep-move {
