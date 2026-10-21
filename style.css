@@ -179,16 +179,28 @@ summary:focus-visible {
   border-bottom: 1px solid var(--color-border);
 }
 
-/* Pinned to the left edge, not centred: the hamburger sits flush
-   against the header's left padding, then the logo mark and the
-   wordmark follow with one consistent 12px gap, and any spare space
-   falls on the right. (This used to be a max-width: 640px column with
-   margin: 0 auto, which centred the whole group on wider screens.) */
+/* Left-aligned within the page column: the hamburger comes first, then
+   the logo mark and the wordmark with one consistent 12px gap, and any
+   spare space falls on the right — never centred as a group. The row
+   itself follows the same centred column as main and the footer (see
+   --page-max under Layout), so on wider screens the header lines up with
+   the content below it; on a phone the column is the full width, so the
+   hamburger sits flush against the header's left padding. */
 .header-inner {
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: 0.75rem;
+  max-width: calc(var(--page-max) - 2 * var(--spacing));
+  margin-inline: auto;
+}
+
+/* Inline nav links — only shown from 1024px up, where they replace the
+   hamburger (see Wider viewports). display: none until then also keeps
+   them out of the accessibility tree, so there's only ever one primary
+   nav exposed at a time. */
+.header-nav {
+  display: none;
 }
 
 .logo {
@@ -437,9 +449,17 @@ body.nav-open {
 
 /* --- Layout ------------------------------------------------------------ */
 
+/* One page column for everything: main, the header row and the footer
+   all use --page-max (outer width, including main's side padding), so
+   they line up on the same centred column at every width. 640px up to
+   the desktop breakpoint; wider there (see Wider viewports). */
+body {
+  --page-max: 640px;
+}
+
 main {
   flex: 1;
-  max-width: 640px;
+  max-width: var(--page-max);
   width: 100%;
   margin: 0 auto;
   padding: var(--spacing);
@@ -1521,7 +1541,7 @@ input[type="text"]::placeholder {
 }
 
 .footer-grid {
-  max-width: 640px;
+  max-width: calc(var(--page-max) - 2 * var(--spacing));
   margin: 0 auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1599,7 +1619,7 @@ input[type="text"]::placeholder {
 }
 
 .footer-fine-print {
-  max-width: 640px;
+  max-width: calc(var(--page-max) - 2 * var(--spacing));
   margin: var(--footer-space-2) auto 0;
   padding-top: var(--footer-space-3);
   /* A short dashed rule rather than a plain hairline: 6px dashes, 6px
@@ -1730,4 +1750,85 @@ input[type="text"]::placeholder {
 .debug-timing-panel th {
   color: #b8b8b8;
   border-bottom: 1px solid rgb(255 255 255 / 25%);
+}
+
+/* --- Desktop (1024px and up) ------------------------------------------
+   Breakpoints: below 640px is the mobile layout, untouched. 640px
+   (tablet) keeps the 640px column. From 1024px:
+   - The column widens: 880px on the scanner page (body.page-scanner),
+     where the network-status, scan and result cards benefit from the
+     room; 720px on the text pages, where the cards are mostly prose.
+   - Running text inside it is capped at a reading measure of 68ch
+     (roughly 70–75 characters a line), so lines never run the full card
+     width.
+   - The header shows inline nav links instead of the hamburger + panel.
+   - The footer becomes three columns: brand | Product | Legal. */
+@media (min-width: 1024px) {
+  body {
+    --page-max: 720px;
+  }
+
+  body.page-scanner {
+    --page-max: 880px;
+  }
+
+  /* Header: inline links on the right of the column, same ink/accent
+     treatment and current-page highlight as the panel's list, with
+     44px-tall targets and the site-wide focus ring. */
+  .nav-toggle {
+    display: none;
+  }
+
+  .header-nav {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-left: auto;
+  }
+
+  .header-nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 0.75rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.925rem;
+    font-weight: 500;
+    color: var(--color-ink);
+    text-decoration: none;
+  }
+
+  .header-nav a:hover {
+    color: var(--color-accent-text);
+  }
+
+  .header-nav a[aria-current="page"] {
+    color: var(--color-accent-text);
+    font-weight: 600;
+  }
+
+  /* Reading measure for running text. */
+  .prose p,
+  .prose ul,
+  .check-item p,
+  .faq-answer-inner,
+  .risk-finding .finding-body,
+  .risk-disclaimer {
+    max-width: 68ch;
+  }
+
+  /* The scan form doesn't need the card's full width: an address is 42
+     characters, so the input and Scan button stay a comfortable size. */
+  #scan-form {
+    max-width: 60ch;
+  }
+
+  .footer-grid {
+    grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr));
+  }
+
+  .footer-col-brand {
+    grid-column: auto;
+    margin-bottom: 0;
+  }
 }
