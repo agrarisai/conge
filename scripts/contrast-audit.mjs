@@ -124,7 +124,8 @@ const rows = [
   // Input
   ["Input text (ink) on input background (ivory)", T("color-ink"), IVORY, "text"],
   ["Input placeholder (slate, full opacity) on input background (ivory)", T("color-slate"), IVORY, "text"],
-  ["Input border (border-strong) vs white card", T("color-border-strong"), WHITE, "info"],
+  ["Input border (input-border) vs white card", T("color-input-border"), WHITE, "ui"],
+  ["Input border (input-border) vs the input's own ivory fill", T("color-input-border"), IVORY, "ui"],
   // Debug overlay
   ["Debug panel text (#f2f2f2) on its dark background (worst case: over white)", "#f2f2f2", DEBUG_BG, "text"],
   ["Debug panel column headers (#b8b8b8) on its dark background", "#b8b8b8", DEBUG_BG, "text"],
