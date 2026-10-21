@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>How Conge works</title>
-  <meta name="description" content="How Conge works: the Blockscout and Cloudflare Worker data sources it reads, and every ownership, holder, and sell-simulation check it runs on a token." />
+  <meta name="description" content="How Conge works: its Blockscout and Cloudflare Worker data sources, every check it runs on a token with its exact thresholds, what the risk gauge means, and what it cannot detect." />
   <link rel="canonical" href="https://agrarisai.github.io/conge/how-it-works.html" />
 
   <link rel="icon" href="assets/favicon-512.png" type="image/png" sizes="512x512" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Conge" />
   <meta property="og:title" content="How Conge works" />
-  <meta property="og:description" content="How Conge works: the Blockscout and Cloudflare Worker data sources it reads, and every ownership, holder, and sell-simulation check it runs on a token." />
+  <meta property="og:description" content="How Conge works: its Blockscout and Cloudflare Worker data sources, every check it runs on a token with its exact thresholds, what the risk gauge means, and what it cannot detect." />
   <meta property="og:url" content="https://agrarisai.github.io/conge/how-it-works.html" />
   <meta property="og:image" content="https://agrarisai.github.io/conge/assets/social-preview-1200x630.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
 
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="How Conge works" />
-  <meta name="twitter:description" content="How Conge works: the Blockscout and Cloudflare Worker data sources it reads, and every ownership, holder, and sell-simulation check it runs on a token." />
+  <meta name="twitter:description" content="How Conge works: its Blockscout and Cloudflare Worker data sources, every check it runs on a token with its exact thresholds, what the risk gauge means, and what it cannot detect." />
   <meta name="twitter:image" content="https://agrarisai.github.io/conge/assets/social-preview-1200x630.png" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -78,20 +78,65 @@
       <h3>Data sources</h3>
       <div class="prose">
         <p>
-          <strong>Blockscout API v2</strong> is the primary source for everything — whether an
-          address is a contract, whether its source is verified, holder balances, market data,
-          and deployment time. It's a plain read-only HTTP API; Conge never needs a wallet or a
-          signature to query it.
+          <strong>Blockscout API v2</strong> is the primary source for almost everything — whether
+          an address is a contract, the token's name, symbol and supply, its holder list and holder
+          count, whether its source is verified (and its ABI), whether it's an upgradeable proxy,
+          when it was deployed, and market data. It's a plain read-only HTTP API; Conge never needs
+          a wallet or a signature to query it.
         </p>
         <p>
-          A small <strong>Cloudflare Worker</strong> acts as a read-only RPC relay for exactly
-          two things Blockscout has no field for: reading a contract's <code>owner()</code>, and
-          the sell-simulation check below. The Worker only forwards a fixed allow-list of
-          read-only calls (<code>eth_chainId</code>, <code>eth_blockNumber</code>,
-          <code>eth_call</code>, <code>eth_getCode</code>) to the chain's RPC endpoint — nothing
-          that could move funds, change state, or sign anything passes through it, and it's
-          entirely optional: Conge still works, with a smaller set of checks, if the Worker is
-          ever unreachable.
+          Results appear progressively. As soon as the token and holder lookups answer, the result
+          card shows the token's name, supply, holder concentration, holder count and market data.
+          Contract verification, owner privileges and token age each show "Checking…" and fill in
+          on their own as their lookups return — under load, some explorer lookups take several
+          seconds. Every Blockscout request gets 10 seconds; one that doesn't answer in time shows
+          as Unknown, with the reason, instead of holding up the rest.
+        </p>
+        <p>
+          A small <strong>Cloudflare Worker</strong> acts as a read-only RPC relay for the two
+          checks Blockscout has no field for — reading a contract's <code>owner()</code>, and the
+          sell simulation — plus a lightweight connection check (the chain ID) shown under
+          Network status. It exists because the chain's public RPC endpoint has been unreachable
+          from some networks and devices (a TLS certificate error) and doesn't send the CORS
+          headers a browser needs. That endpoint is also shared by everyone on the chain and
+          tightly rate-limited, so the Worker retries a rate-limited call a few times with a short
+          backoff rather than failing straight away.
+        </p>
+        <p>
+          The Worker only forwards a fixed allow-list of read-only calls
+          (<code>eth_chainId</code>, <code>eth_blockNumber</code>, <code>eth_call</code>,
+          <code>eth_getCode</code>), and only for requests coming from this site — nothing that
+          could move funds, change state, or sign anything passes through it. It's also optional:
+          if it's ever unreachable, the owner and sell-simulation checks show Unknown and
+          everything else still works.
+        </p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>What gets scanned</h3>
+      <div class="prose">
+        <p>
+          Conge only scores tokens. Before running any check, it confirms there's a token at the
+          address, and stops with a plain explanation — rather than a risk card full of empty
+          fields — when there isn't:
+        </p>
+        <ul>
+          <li><strong>A wallet address</strong> (no contract code) — there's nothing to scan.</li>
+          <li>
+            <strong>A contract that isn't a standard token</strong> — a router, a pool, or any
+            contract with no token name, symbol, or decimals. Conge says it doesn't look like a
+            standard token and can't analyze it.
+          </li>
+          <li>
+            <strong>An address the explorer doesn't list as a token and can't otherwise identify
+            right now</strong> — Conge says it couldn't confirm what the address is, and suggests
+            trying again.
+          </li>
+        </ul>
+        <p>
+          If the explorer's token lookup itself fails or times out, that proves nothing either
+          way, so the scan goes ahead and each affected check honestly shows Unknown.
         </p>
       </div>
     </section>
@@ -100,44 +145,83 @@
       <h3>The risk checks</h3>
       <div class="prose">
         <p>
-          Every check is transparent and rule-based — no model, no hidden scoring. The overall
-          level shown is the worst result among the checks that actually produced data; Conge
-          never uses the words "safe" or "secure".
+          Every check is transparent and rule-based — no model, no hidden scoring. These are the
+          exact thresholds Conge uses.
         </p>
       </div>
       <div class="check-list">
         <div class="check-item">
           <h4>Source code verified</h4>
-          <p>Whether the contract's source is published and verified on the block explorer. Unverified source is a high-risk flag on its own, and blocks the ABI-based checks below.</p>
+          <p>Whether the contract's source is published and verified on the block explorer. Unverified source is <strong>High</strong> on its own, and it also means the owner-privilege checks below can't run, since they need the verified ABI.</p>
         </div>
         <div class="check-item">
           <h4>Holder concentration</h4>
-          <p>How much of the supply the largest holder, and the top 10 holders together, control — a single wallet or a small group holding too much can move the price on its own.</p>
+          <p>How much of the total supply the largest holder, and the top 10 holders together, control. The zero address and the common <code>0x…dEaD</code> burn address are left out, since tokens sent there are out of circulation.</p>
+          <p>Largest holder: over 50% is <strong>High</strong>, over 20% is <strong>Medium</strong>. Top 10 combined: over 80% is <strong>Medium</strong>. When both come out Medium, they're shown as one finding.</p>
+          <p>When the block explorer tags a top holder as a contract — typically a liquidity pool, bridge, or vault — the finding says so, because supply held by a pool reads very differently from supply held by a single wallet. That note explains the number; it doesn't lower the severity, and Conge only mentions it when the explorer actually tagged the address.</p>
         </div>
         <div class="check-item">
           <h4>Holder count</h4>
-          <p>How many independent holders the token has. Very few holders means the price can be moved by a handful of wallets.</p>
+          <p>How many holders the token has. Fewer than 10 is <strong>High</strong>; 10 to 99 is <strong>Medium</strong>; 100 or more passes. With very few holders, the price can be moved by a handful of wallets.</p>
         </div>
         <div class="check-item">
           <h4>Token age</h4>
-          <p>How long ago the contract was deployed. Very new tokens haven't had time for problems, or scams, to surface.</p>
+          <p>How long ago the contract was deployed, from its creation transaction. Under 24 hours is <strong>High</strong>; under 7 days is <strong>Medium</strong>; older passes. Very new tokens haven't had time for problems, or scams, to surface.</p>
+        </div>
+        <div class="check-item">
+          <h4>Upgradeable proxy</h4>
+          <p>Whether whoever controls the contract can swap out its logic — detected from the explorer's proxy information, or from an <code>upgradeTo</code>-style function in the verified ABI.</p>
+          <p>An upgradeable proxy with unverified source is <strong>High</strong>: its logic can change with no way to confirm what it would become. With verified source it's <strong>Medium</strong> — common for regulated or compliance-driven tokens, but you're trusting whoever controls upgrades. It rises to <strong>High</strong> when the upgrade admin is confirmed to be a plain wallet rather than a contract such as a multisig or timelock. If the admin's type can't be confirmed, it stays Medium rather than guessing.</p>
         </div>
         <div class="check-item">
           <h4>Owner privileges</h4>
-          <p>Whether the contract is an upgradeable proxy, and — for verified contracts — whether its ABI exposes functions to mint new tokens, pause transfers, blacklist addresses, change fees, or cap transaction size.</p>
+          <p>For verified contracts only, the ABI is searched by function name for owner powers: minting new tokens, pausing transfers, blacklisting or blocklisting addresses, and setting fees or taxes are each <strong>Medium</strong>; setting a maximum transaction or wallet size is <strong>Low</strong>. If none are found and the contract isn't a proxy, the check passes. If the source isn't verified (or the ABI couldn't be read), this shows Unknown.</p>
         </div>
         <div class="check-item">
-          <h4>Owner status</h4>
-          <p>Who currently holds owner privileges (via the Worker's read of <code>owner()</code>), or whether ownership has been renounced to the zero address.</p>
+          <h4>Owner</h4>
+          <p>Who currently holds owner privileges, read via the Worker from <code>owner()</code> — or that ownership has been renounced to the zero address, meaning any owner-only functions listed above can no longer be called. This is informational and doesn't raise the risk level by itself. Renouncing ownership doesn't cover a proxy's upgrade admin, which is separate.</p>
         </div>
         <div class="check-item">
           <h4>Sell-simulation honeypot check</h4>
-          <p>Simulates, read-only, whether a normal holder can actually transfer the token to a detected liquidity pool — some tokens look fine on paper but silently block selling. See the limits below for exactly what this can and can't catch.</p>
+          <p>A read-only simulation (an <code>eth_call</code>, never a real transaction) of whether an ordinary holder can actually sell. Conge first looks for liquidity pools among the top 5 holders by asking each contract holder for <code>token0()</code>/<code>token1()</code> — any contract that pairs this token is treated as a pool, whichever DEX it belongs to. It then simulates, from up to 2 plain-wallet top holders, a transfer of 1% of their balance to an ordinary address and to each pool found.</p>
+          <p>If the ordinary transfer fails for every holder tried, it's <strong>High</strong> ("Transfers are restricted" — a pause, blacklist, or allowlist). If ordinary transfers work but every transfer to a pool fails, it's <strong>High</strong> ("Selling appears blocked" — the classic honeypot). If both succeed, it passes. If there's no pool among the top 5 holders, no eligible wallet to test from, or the RPC can't be reached, the check says so and shows Unknown — never a pass. See the limits below for what this can't catch.</p>
         </div>
         <div class="check-item">
           <h4>Market data</h4>
-          <p>Price, 24h volume, and market cap, shown for context. Informational only — it never affects the risk level.</p>
+          <p>Price, 24-hour volume, and market cap as reported by the block explorer, shown in USD for context. Informational only — it never affects the risk level.</p>
         </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>The risk gauge</h3>
+      <div class="prose">
+        <p>
+          The overall level is simply the worst result among the checks that actually produced
+          data. Conge never uses the words "safe" or "secure".
+        </p>
+        <ul>
+          <li><strong>High</strong> — at least one check came back High.</li>
+          <li><strong>Medium</strong> — no High, but at least one Medium.</li>
+          <li>
+            <strong>Low</strong> — no Medium or High findings in these automated checks. There may
+            still be minor (Low) notes, and Low is not a guarantee.
+          </li>
+          <li>
+            <strong>Insufficient data</strong> — none of the checks that count produced usable
+            data, so there's no honest verdict to give.
+          </li>
+        </ul>
+        <p>
+          A check that couldn't produce a result is shown as <strong>Unknown</strong>, grouped
+          under "Info / unknown". Unknown checks never count toward the level — not as a red flag,
+          and never as a pass. Market data and the owner check are informational and don't raise
+          the level either.
+        </p>
+        <p>
+          While checks are still running, the gauge reads "Finalizing risk level…" and the needle
+          sweeps; it only settles once every check that affects the level has finished.
+        </p>
       </div>
     </section>
 
@@ -146,11 +230,12 @@
       <div class="prose">
         <p>None of this is an audit or a guarantee — it's a fast, transparent read of public data. Specific, known gaps:</p>
         <ul>
-          <li><strong>Buy/sell tax.</strong> The sell-simulation check confirms a transfer isn't outright blocked, but can't measure a fee taken on top of it.</li>
+          <li><strong>Buy/sell tax.</strong> The sell simulation confirms a transfer to a pool isn't outright blocked, but can't measure a fee taken on top of it.</li>
           <li><strong>Router-only logic.</strong> Some tokens only misbehave when the caller is a specific DEX router mid-swap — a direct transfer simulation from a holder doesn't reproduce that.</li>
-          <li><strong>Time- or amount-based traps.</strong> A token that only blocks transfers above a threshold, or after/before a certain time, can pass every check here while still being a trap in practice.</li>
+          <li><strong>Time- or amount-based traps.</strong> The simulation moves 1% of a holder's balance, right now. A token that only blocks larger transfers, or only after or before a certain time, can pass every check here while still being a trap in practice.</li>
+          <li><strong>Pools outside the top holders.</strong> The sell simulation only looks for pools among the top 5 holders, and only recognizes pools that answer <code>token0()</code>/<code>token1()</code>. When it finds none, it says so (Unknown) rather than passing.</li>
           <li><strong>Name-based checks aren't a bytecode audit.</strong> The owner-privilege check looks for functions by name in a verified ABI — a differently-named function with the same effect won't be caught.</li>
-          <li><strong>A scan sometimes can't finish.</strong> The owner and sell-simulation checks depend on a shared public RPC that can rate-limit under load — see the <a href="faq.html">FAQ</a> for what "Unknown" means when that happens.</li>
+          <li><strong>A scan sometimes can't finish every check.</strong> The owner and sell-simulation checks depend on a shared public RPC that rate-limits under load, and some block-explorer lookups can be slow or time out. Affected checks show Unknown with the reason — see the <a href="faq.html">FAQ</a>.</li>
         </ul>
         <p>Always verify independently on the block explorer before acting on anything Conge shows you.</p>
       </div>
