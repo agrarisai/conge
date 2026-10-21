@@ -369,7 +369,7 @@ either. It's built entirely with plain CSS custom properties in
 
 - **Color** — ivory (`--color-bg`, `#FAF9F4`) background, ink
   (`--color-ink`, `#0F1115`) primary text, slate (`--color-slate`,
-  `#63665F`) secondary text. The brand accent is a **signal blue**
+  `#60635C`) secondary text. The brand accent is a **signal blue**
   (`--color-accent`, `#0B84F3` — updated from an earlier signal green,
   `#03FA73`, when the logo was replaced with the current target/radar
   mark): buttons, links, and focus rings. A raw contrast check on the new
@@ -618,6 +618,7 @@ scroll-fx.js          # background parallax (every page) + the one scroll-sweep 
 app.js               # app logic for index.html only (ES module, imports viem utils + scoring.js)
 scoring.js           # Risk Score v1 — pure, rule-based scoring + ABI helpers
 tests/scoring.test.js  # unit tests for scoring.js (node --test)
+scripts/contrast-audit.mjs  # WCAG contrast check of every real text/background pairing, read from style.css (node scripts/contrast-audit.mjs)
 robots.txt           # allows all crawling, points to sitemap.xml — see "SEO" below
 sitemap.xml           # all five pages' absolute URLs — see "SEO" below
 assets/              # brand imagery — see "Branding assets" below

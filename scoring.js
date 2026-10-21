@@ -849,3 +849,36 @@ export function scoreToken(facts, thresholds = THRESHOLDS) {
   ];
   return { overallLevel: computeOverallLevel(findings, thresholds), findings };
 }
+
+// --- What kind of address is being scanned --------------------------------
+
+// True when a /tokens body carries none of the standard ERC-20 metadata —
+// no name, no symbol, no decimals — i.e. Blockscout couldn't read them
+// (they revert, or the contract simply doesn't implement them).
+export function lacksTokenMetadata(tokenBody) {
+  if (!tokenBody) return true;
+  const missing = (v) => v === null || v === undefined || v === "";
+  return missing(tokenBody.name) && missing(tokenBody.symbol) && missing(tokenBody.decimals);
+}
+
+// Decides, before the token-risk flow runs, whether there is a token to
+// analyze at all. Pure, so it can be tested without the network.
+//   token:      "found" (/tokens answered), "not-found" (404 — Blockscout
+//               doesn't list it as a token), or "failed" (timeout/5xx —
+//               unknown either way).
+//   tokenBody:  the /tokens body when found.
+//   isContract: from /addresses — true, false, or null if it didn't answer.
+// Returns one of:
+//   "token"                    — run the full token-risk flow
+//   "token-unconfirmed"        — /tokens failed; run the flow and let each
+//                                check degrade to an honest Unknown
+//   "wallet"                   — no contract code: nothing to scan
+//   "non-token-contract"       — contract code, but not a standard token
+//   "not-a-token-unconfirmed"  — not listed as a token, and /addresses
+//                                couldn't say whether it's a contract
+export function classifyScanTarget({ token, tokenBody = null, isContract = null }) {
+  if (isContract === false) return "wallet";
+  const notAToken = token === "not-found" || (token === "found" && lacksTokenMetadata(tokenBody));
+  if (!notAToken) return token === "found" ? "token" : "token-unconfirmed";
+  return isContract === true ? "non-token-contract" : "not-a-token-unconfirmed";
+}

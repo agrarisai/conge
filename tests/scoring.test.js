@@ -36,6 +36,8 @@ import {
   scoreMarketData,
   computeOverallLevel,
   scoreToken,
+  lacksTokenMetadata,
+  classifyScanTarget,
 } from "../scoring.js";
 
 // --- isBurnOrZeroAddress / computeHolderPercentage --------------------
@@ -1007,4 +1009,46 @@ test("scoreToken: /addresses timeout fixture — verification falls back to /sma
   // count, so the level matches the same facts with no age at all.
   const noAge = scoreToken({ ...base, createdAtIso: null });
   assert.equal(timedOut.overallLevel, noAge.overallLevel);
+});
+
+// --- Non-token contracts ---------------------------------------------------
+// A contract with code that isn't a standard ERC-20 (a router, a pool, a
+// proxy with no token interface) must stop with a clear message instead of
+// running the token-risk flow — which would otherwise show a card of
+// "Unavailable" fields and a meaningless verdict (it scored a router "Low").
+
+test("lacksTokenMetadata: only when name, symbol and decimals are all missing", () => {
+  assert.equal(lacksTokenMetadata(null), true);
+  assert.equal(lacksTokenMetadata({ name: null, symbol: null, decimals: null }), true);
+  assert.equal(lacksTokenMetadata({ name: "", symbol: undefined, decimals: "" }), true);
+  assert.equal(lacksTokenMetadata({ name: null, symbol: null, decimals: "18" }), false);
+  assert.equal(lacksTokenMetadata({ name: "Global Dollar", symbol: "USDG", decimals: "6" }), false);
+  // decimals 0 is real metadata, not "missing".
+  assert.equal(lacksTokenMetadata({ name: null, symbol: null, decimals: 0 }), false);
+});
+
+test("classifyScanTarget: non-token contract fixture — /tokens 404 but /addresses has contract code", () => {
+  // e.g. a DEX router: verified contract, but Blockscout doesn't list it as a token.
+  assert.equal(classifyScanTarget({ token: "not-found", isContract: true }), "non-token-contract");
+});
+
+test("classifyScanTarget: non-token contract fixture — listed, but name/symbol/decimals all revert", () => {
+  const body = { name: null, symbol: null, decimals: null, total_supply: null, holders_count: "0", type: "ERC-20" };
+  assert.equal(classifyScanTarget({ token: "found", tokenBody: body, isContract: true }), "non-token-contract");
+});
+
+test("classifyScanTarget: wallets, real tokens and unconfirmed cases", () => {
+  assert.equal(classifyScanTarget({ token: "not-found", isContract: false }), "wallet");
+  assert.equal(
+    classifyScanTarget({ token: "found", tokenBody: { name: "Global Dollar", symbol: "USDG", decimals: "6" } }),
+    "token",
+  );
+  // Not listed as a token and /addresses didn't answer: say we can't tell,
+  // never guess "token" or "wallet".
+  assert.equal(classifyScanTarget({ token: "not-found", isContract: null }), "not-a-token-unconfirmed");
+  // /tokens itself failed (timeout/5xx): unknown, not "not a token" — run
+  // the flow and let each check degrade to an honest Unknown.
+  assert.equal(classifyScanTarget({ token: "failed", isContract: true }), "token-unconfirmed");
+  assert.equal(classifyScanTarget({ token: "failed", isContract: null }), "token-unconfirmed");
+  assert.equal(classifyScanTarget({ token: "failed", isContract: false }), "wallet");
 });
