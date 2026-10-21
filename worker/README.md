@@ -24,8 +24,7 @@ secrets, no KV/D1, and it never logs request bodies.
     shape is caller-defined.
   - Request bodies over 20 KB are rejected before they're parsed.
   - Requests are restricted to the site's exact origins —
-    `https://agrarisai.github.io`, `https://conge.site` and
-    `https://www.conge.site` — with no wildcard. This is enforced **server-side**, not just through CORS
+    `https://conge.site` and `https://www.conge.site` — with no wildcard. This is enforced **server-side**, not just through CORS
     headers. Any POST whose `Origin` isn't exactly that, including one with
     no `Origin` at all (curl's default), gets `403` before the body is read
     or anything reaches the upstream. The `OPTIONS` preflight is checked the
@@ -49,81 +48,51 @@ secrets, no KV/D1, and it never logs request bodies.
 
 ## Deploying
 
-The Worker deploys automatically from this repository via Cloudflare
-**Workers Builds** (Git integration): merging a PR into `main` that touches
-`worker/` builds and deploys it. Nothing gets copied into the dashboard by
-hand. The deploy configuration lives in this folder:
-
-- [`wrangler.toml`](./wrangler.toml) — Worker name (`conge-rpc`), entry
-  point (`index.js`), compatibility date, and the `workers_dev` switch.
-  Routes and the custom domain (`rpc.conge.site`) are **not** in this file
-  — they stay managed in the dashboard, and a deploy leaves them untouched.
-- [`package.json`](./package.json) / `package-lock.json` — pins
-  [Wrangler](https://developers.cloudflare.com/workers/wrangler/) as a dev
-  dependency, so every build uses the same version. There is no build step:
-  `index.js` is deployed as-is.
-
-### Connecting the repository (one-time setup)
+The Worker is deployed **manually through the Cloudflare dashboard**. It
+is not connected to this repository, so merging a PR does **not** update
+the live Worker. After a change to [`index.js`](./index.js) is merged,
+deploy it by hand:
 
 1. In [dash.cloudflare.com](https://dash.cloudflare.com), open **Workers &
-   Pages** and select the existing **`conge-rpc`** Worker.
-2. Go to **Settings → Build** and, under **Git repository**, click
-   **Connect**.
-3. Choose **GitHub**, authorize the Cloudflare Workers and Pages GitHub app
-   for the repository's account if prompted, and select this repository.
-4. Configure the build:
-   - **Git branch (production):** `main`
-   - **Root directory (Path):** `worker`
-   - **Build command:** leave empty — none needed.
-   - **Deploy command:** `npx wrangler deploy`
-   - **Build watch paths (recommended):** include `worker/*`, so commits
-     that only change the website don't redeploy the Worker.
-   - **Builds for non-production branches:** optional. If enabled, keep the
-     default `npx wrangler versions upload`, which uploads a preview version
-     without making it live.
-5. Save. The next push to `main` — or **Retry build** from the Worker's
-   **Deployments** tab — builds and deploys. Workers Builds installs the
-   dependencies from `package-lock.json` automatically before running the
-   deploy command.
+   Pages** and select the **`conge-rpc`** Worker.
+2. Click **Edit code**.
+3. Select everything in the editor and replace it with the full contents of
+   [`index.js`](./index.js) from `main`.
+4. Click **Deploy**.
 
-Things to know:
+There's no build step: what you paste is exactly what runs. Routes and the
+custom domain (`rpc.conge.site`) are configured in the dashboard and aren't
+affected by pasting new code.
 
-- **The Worker name must match.** `name = "conge-rpc"` in `wrangler.toml`
-  must be the name of the Worker you connected; otherwise the build fails
-  instead of deploying.
-- **`workers_dev` is applied on every deploy.** It's set to `true` (the
-  original `conge-rpc.<subdomain>.workers.dev` address stays on). To turn
-  that address off — e.g. for the rate-limiting plan below — set it to
-  `false` in `wrangler.toml` and merge. Turning it off only in the dashboard
-  would be undone by the next deploy.
-- **Configuration that isn't in `wrangler.toml` can be overwritten.** The
-  Worker currently has no environment variables or bindings. If you ever
-  add some, put them in `wrangler.toml` (or as encrypted secrets), not only
-  in the dashboard.
-- **Merging is what deploys.** A change to `index.js`, such as the allowed
-  origins, goes live when its PR is merged into `main`, not before.
-
-To deploy from your own machine instead (e.g. to test before connecting
-Git): `cd worker && npm install && npx wrangler login && npm run deploy`.
-
-### Manual fallback (dashboard editor)
-
-Editing in the dashboard still works if Git deploys are ever unavailable:
-**Workers & Pages → `conge-rpc` → Edit code**, replace everything with the
-contents of [`index.js`](./index.js), and **Deploy**. What you paste is
-exactly what runs. Bear in mind that the next Git-triggered deploy
-overwrites a manual edit with whatever is on `main`, so commit the same
-change to the repository too.
+To confirm the deploy, run the `curl` check under
+[Testing it yourself](#testing-it-yourself) against `https://rpc.conge.site/`,
+or open `https://rpc.conge.site/health`.
 
 To set up a brand-new copy of this Worker from scratch, create a Worker
 named `conge-rpc` in **Workers & Pages → Create → Create Worker**, then
-either connect this repository as above or paste `index.js` in the editor.
-It will be live at `https://conge-rpc.<your-subdomain>.workers.dev`.
+paste `index.js` in the editor as above. It will be live at
+`https://conge-rpc.<your-subdomain>.workers.dev`.
 
 If you ever need to change the allowed origins (e.g. testing from
 `localhost`) or the upstream URL, edit the `ALLOWED_ORIGINS` and
-`UPSTREAM_RPC` constants near the top of `index.js` and merge (or paste,
-for the manual fallback).
+`UPSTREAM_RPC` constants near the top of `index.js`, then deploy as above.
+
+### Optional: deploying with Wrangler from your own machine
+
+[`wrangler.toml`](./wrangler.toml) and [`package.json`](./package.json)
+let you deploy from a terminal instead of pasting:
+`cd worker && npm install && npx wrangler login && npm run deploy`. That's
+optional, and nothing runs it automatically. If you do use it:
+
+- **The name must match.** `name = "conge-rpc"` in `wrangler.toml` must be
+  the Worker's name.
+- **`workers_dev` is applied.** It's set to `true` in `wrangler.toml`, so a
+  Wrangler deploy turns the `conge-rpc.<subdomain>.workers.dev` address
+  (back) on. If you've switched that address off in the dashboard, set
+  `workers_dev = false` first.
+- **Dashboard-only variables would be dropped.** The Worker currently has
+  no environment variables or bindings. If you ever add some, also put them
+  in `wrangler.toml`.
 
 ## Reading `/health`
 
@@ -146,8 +115,8 @@ works too.
 
 ## Testing it yourself
 
-The allowed origins are `https://agrarisai.github.io`, `https://conge.site`
-and `https://www.conge.site`, so a plain `curl` without an `Origin` header
+The allowed origins are `https://conge.site` and `https://www.conge.site`,
+so a plain `curl` without an `Origin` header
 will get `403` — that's correct, not a bug. Pass the header explicitly to
 test as the real site would (this project's Worker is at
 `https://rpc.conge.site`; a fresh deploy of your own starts on
@@ -168,8 +137,7 @@ The upstream RPC is a shared, rate-limited resource, so the Worker and the
 site protect it in layers:
 
 - **Server-side origin check (in code).** Only the site's origins
-  (`https://agrarisai.github.io`, `https://conge.site`,
-  `https://www.conge.site`) are accepted. Any other `Origin`, or none, gets `403` before any upstream
+  (`https://conge.site`, `https://www.conge.site`) are accepted. Any other `Origin`, or none, gets `403` before any upstream
   work. `worker/tests/worker.test.js` covers forged origins on the actual
   POST: no Origin, `null`, look-alike domains, the wrong scheme, a trailing
   slash or path, a port, different letter case, and browser-like headers
@@ -201,8 +169,8 @@ owns that zone.
 > **Status for this project:** steps 1–3 are done. The Worker is on
 > `https://rpc.conge.site`, and `WORKER_URL` in `app.js` points there. Step
 > 4 is **still open**: the old `conge-rpc.agrarisai.workers.dev` address
-> still works (`workers_dev = true` in `wrangler.toml`), so a rate limiting
-> rule on `conge.site` can be bypassed through it until it's turned off.
+> still works, so a rate limiting rule on `conge.site` can be bypassed
+> through it until it's turned off.
 
 1. Add your domain to Cloudflare, if it isn't already. The Free plan is
    enough.
@@ -212,11 +180,12 @@ owns that zone.
 3. In the site's `app.js`, change `WORKER_URL` to that hostname. The
    Worker's `ALLOWED_ORIGINS` doesn't change: it lists the *site's* origin,
    not the Worker's.
-4. **Turn off the `workers.dev` address** by setting `workers_dev = false` in
-   [`wrangler.toml`](./wrangler.toml) and merging. Otherwise the old
+4. **Turn off the `workers.dev` address**: back in **Domains & Routes**,
+   disable the `workers.dev` route. Otherwise the old
    `conge-rpc.<subdomain>.workers.dev` URL keeps working and bypasses the
-   rule. Since deploys come from Git, switching it off only under **Domains
-   & Routes** in the dashboard would be undone by the next deploy.
+   rule. (If you ever deploy with Wrangler instead of the dashboard editor,
+   also set `workers_dev = false` in [`wrangler.toml`](./wrangler.toml),
+   or that deploy turns the address back on.)
 
 **Create the rule:**
 
