@@ -114,6 +114,26 @@
         }
       });
     }
+
+    // From 1024px up the header shows inline nav links instead of the
+    // hamburger (see style.css), so the panel can't stay open across that
+    // switch: close it — without moving focus to a toggle that's now hidden.
+    var desktop = window.matchMedia("(min-width: 1024px)");
+    var inlineNav = header.querySelector(".header-nav");
+    var onDesktopChange = function () {
+      if (!desktop.matches || !isOpen()) return;
+      // If focus was inside the panel, hand it to the equivalent link in
+      // the now-visible inline nav rather than leaving it on a hidden
+      // element (which would make the next Tab skip the header).
+      var focusWasInPanel = panel.contains(document.activeElement);
+      closeMenu({ returnFocus: false });
+      if (focusWasInPanel && inlineNav) {
+        var target = inlineNav.querySelector('[aria-current="page"]') || inlineNav.querySelector("a");
+        if (target) target.focus();
+      }
+    };
+    if (desktop.addEventListener) desktop.addEventListener("change", onDesktopChange);
+    else if (desktop.addListener) desktop.addListener(onDesktopChange);
   }
 
   document.querySelectorAll(".site-header").forEach(initNav);
