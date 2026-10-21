@@ -1139,6 +1139,24 @@ exactly; a second scenario with the rate limit never lifting confirmed
 both checks end in an honest Unknown (with real diagnostics) rather than
 hanging or retrying forever.
 
+**Protecting the shared resource from abuse.** The resilience above is
+about riding out the upstream's own limit. Separately, the Worker and the
+site keep any single visitor or script from overusing it:
+
+- **Server-side origin check:** the Worker rejects any POST whose `Origin`
+  isn't the site's, including requests with no `Origin` header, with
+  `403`. This happens before any upstream work.
+- **Shared `/health` check:** `/health` shares one upstream check for 15
+  seconds.
+- **Scan cooldown:** after every scan, the Scan and Rescan buttons stay
+  disabled for 3 seconds with a visible "Scan again in 3s" countdown.
+- **Per-IP rate limiting:** set as a Cloudflare Rate Limiting Rule, which
+  is a manual dashboard step.
+
+See [worker/README.md → Abuse protection and rate
+limiting](worker/README.md#abuse-protection-and-rate-limiting) for the
+exact dashboard steps.
+
 ## Known limitations
 
 - **The shared public RPC's rate limit can leave a check Unknown.**

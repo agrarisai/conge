@@ -876,6 +876,29 @@ input[type="text"]::placeholder {
   cursor: not-allowed;
 }
 
+/* Post-scan cooldown (see startScanCooldown in app.js): still disabled,
+   but showing a countdown the visitor needs to read, so it's a calm,
+   full-opacity neutral "waiting" state rather than the faded disabled
+   look (55% opacity would put the label near 2:1). Slate on the neutral
+   tint is 5.4:1; slate on the white card (Rescan) is 6.1:1. The busy dot
+   is hidden — nothing is scanning any more. */
+.primary-button.is-cooling-down:disabled {
+  opacity: 1;
+  background-color: var(--tone-neutral-bg);
+  color: var(--color-slate);
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
+}
+
+.secondary-button.is-cooling-down:disabled {
+  opacity: 1;
+  color: var(--color-slate);
+}
+
+.primary-button.is-cooling-down:disabled .button-busy-dot,
+.secondary-button.is-cooling-down:disabled .button-busy-dot {
+  display: none;
+}
+
 /* Quiet, link-styled button (e.g. "Try an example") — deliberately
    secondary to the primary Scan button: no fill, no border, just accent
    text. Still a full 44px-tall tap target via min-height, and keyboard
