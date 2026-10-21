@@ -588,7 +588,7 @@ actually on that page rather than a repeated site-wide tagline or any
 claim the page itself doesn't back up. Every page also has:
 
 - A `<link rel="canonical">` pointing at its own real URL under
-  `https://agrarisai.github.io/conge/`.
+  `https://conge.site/`.
 - Open Graph (`og:type=website`, `og:site_name`, `og:title`,
   `og:description`, `og:url`, `og:image` + dimensions) and Twitter Card
   (`summary_large_image`, matching title/description/image) tags, all
@@ -673,10 +673,17 @@ To run the risk-scoring unit tests: `node --test tests/scoring.test.js`
 No build step is needed since this is a static site — GitHub Pages serves
 the files as-is.
 
-This repo is currently deployed at `https://agrarisai.github.io/conge/`,
-which is hardcoded into the absolute URLs in `index.html`'s Open Graph /
-Twitter card tags (see [Branding assets](#branding-assets)). If you fork
-or rename this repo, update those URLs to match the new address.
+The site is live at its custom domain, **`https://conge.site/`** (the
+`CNAME` file in this repo; GitHub Pages behind Cloudflare). That's the
+canonical, official address: every page's `<link rel="canonical">`, the
+Open Graph / Twitter card URLs and image, `sitemap.xml`, and the
+`Sitemap:` line in `robots.txt` all point at `https://conge.site/…` (see
+[SEO](#seo) and [Branding assets](#branding-assets)). The original
+`https://agrarisai.github.io/conge/` address still resolves — GitHub Pages
+redirects it to the custom domain — and the Worker still accepts that
+origin, but it's no longer declared anywhere as the site's URL. If you
+fork this repo or move the site again, update those absolute URLs (and
+`CNAME`) to the new address.
 
 
 ### Cache-busting CSS and JS
@@ -717,7 +724,7 @@ this codebase):
   added to a home screen (`<link rel="apple-touch-icon">`).
 - `assets/social-preview-1200x630.png` — the Open Graph / Twitter card
   image shown when a link to the site is shared. Referenced with an
-  **absolute** URL (`https://agrarisai.github.io/conge/assets/...`), since
+  **absolute** URL (`https://conge.site/assets/...`), since
   the crawlers that read these tags don't resolve relative URLs against
   the page the way a browser does. If this site is ever moved to a
   different URL, update `og:url`/`og:image`/`twitter:image` in
