@@ -489,10 +489,12 @@ either. It's built entirely with plain CSS custom properties in
     the generic-AI-page habit of fading/sliding every section in as it's
     scrolled to — nothing on this site animates in on scroll except this:
     a dot-and-dash mark (the same marker a signal-list finding uses)
-    travels once across a hairline divider between the Network status
-    and Scan a token cards, via an `IntersectionObserver` that fires the
-    first time that divider enters view and then disconnects — it never
-    replays on scroll up/down. Every other section, card, and finding
+    sweeps across a hairline divider between the Network status and Scan
+    a token cards. The same 1.2s sweep repeats every ~4 seconds for as
+    long as that divider is on screen. An `IntersectionObserver` pauses
+    the loop (nothing runs) while the divider is scrolled out of view, or
+    the tab is in the background, and resumes it when it's back. Every
+    other section, card, and finding
     row is simply present, not animated in, when scrolled to; that's a
     deliberate choice, not an oversight. Skipped entirely under
     `prefers-reduced-motion`.
@@ -615,7 +617,7 @@ disclaimer.html      # content page — see "Pages" below
 style.css            # styling for every page above (mobile-first, light theme)
 nav.js                # shared header hamburger-nav toggle, loaded by every page
 faq.js                # FAQ accordion (faq.html only; answers stay visible without JS)
-scroll-fx.js          # background parallax (every page) + the one scroll-sweep moment (index.html), see Design
+scroll-fx.js          # background parallax (every page) + the looping scroll-sweep while it's on screen (index.html), see Design
 app.js               # app logic for index.html only (ES module, imports viem utils + scoring.js)
 scoring.js           # Risk Score v1 — pure, rule-based scoring + ABI helpers
 tests/scoring.test.js  # unit tests for scoring.js (node --test)

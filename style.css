@@ -469,12 +469,13 @@ main {
 }
 
 /* --- Scroll sweep (index.html only) -------------------------------------
-   The one deliberate scroll-triggered moment on the page (see the
-   brief): a dot-and-dash mark — the exact marker used for a signal-list
-   finding (see .finding-marker) — travels once across a hairline track
-   as the scan section first enters view, then stays gone. Not a repeat
-   effect and not applied to any other section; scroll-fx.js fires this
-   via IntersectionObserver the first time only, then disconnects.
+   The one deliberate scroll-driven moment on the page (see the brief):
+   a dot-and-dash mark — the exact marker used for a signal-list finding
+   (see .finding-marker) — travels across a hairline track between the
+   hero and the scan section. Not applied to any other section.
+   scroll-fx.js replays this same single 1.2s animation every ~4s while
+   the track is on screen (IntersectionObserver), and stops it entirely
+   while it's off-screen or the tab is hidden.
    --sweep-distance is set by scroll-fx.js to the track's actual measured
    width right before the animation starts (a plain CSS % of the mark's
    OWN small width wouldn't reach across it). */
