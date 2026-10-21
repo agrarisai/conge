@@ -706,10 +706,14 @@ it on). Every scan then reports its stages, in ms since Scan was tapped:
 
 - each Blockscout call
 - **First partial render** (token + holders shown)
-- **Check resolved** rows for contract verification, owner privileges and
-  token age
+- **Check ready** rows for contract verification, owner privileges and
+  token age: when each result was available, which can be before the
+  card renders
 - the Worker owner and sell-simulation checks
 - **Final verdict shown**
+- **Main thread long tasks (≥50ms) during scan**: how long JavaScript
+  blocked the page, to rule event-loop blocking in or out. Chromium only;
+  other browsers say "not supported".
 
 Each Blockscout row also shows three diagnostic columns:
 
@@ -749,9 +753,17 @@ rows independently, whenever their own data arrives:
 - owner privileges, from `/smart-contracts` and the proxy admin
 - token age, from `/addresses` then `/transactions`
 
-The Worker owner and sell-simulation rows work the same way. The risk
-gauge stays at "Finalizing risk level…" until every check that affects
-scoring has resolved.
+Each of these checks starts as soon as its own data arrives, even before
+the card has rendered. A check that is already done when the card appears
+shows its result straight away.
+
+The Worker owner() check needs only the address, so it starts right away,
+alongside the Blockscout calls. The sell simulation follows it after the
+usual `CHUNK_DELAY_MS` gap, once the holder list is in. Top-level Worker
+jobs (the page-load connection probe, owner() and the sell simulation) go
+through one small queue, so they never hit the rate-limited RPC at the same
+moment. The risk gauge stays at "Finalizing risk level…" until every check
+that affects scoring has resolved.
 
 None of the Worker rate-limit spacing or retries (`CHUNK_DELAY_MS` and
 friends) apply to Blockscout. Each Blockscout request is a single `fetch`
