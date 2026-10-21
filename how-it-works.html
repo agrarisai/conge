@@ -151,43 +151,70 @@
       </div>
       <div class="check-list">
         <div class="check-item">
-          <h4>Source code verified</h4>
+          <div class="check-item-head">
+            <h4>Source code verified</h4>
+            <span class="severity-tag severity-tag-high"><svg class="finding-marker" viewBox="0 0 34 9" aria-hidden="true" focusable="false"><circle cx="3.5" cy="4.5" r="3"></circle><line x1="13" y1="4.5" x2="19" y2="4.5"></line><line x1="25" y1="4.5" x2="31" y2="4.5"></line></svg>Up to High</span>
+          </div>
           <p>Whether the contract's source is published and verified on the block explorer. Unverified source is <strong>High</strong> on its own, and it also means the owner-privilege checks below can't run, since they need the verified ABI.</p>
         </div>
         <div class="check-item">
-          <h4>Holder concentration</h4>
+          <div class="check-item-head">
+            <h4>Holder concentration</h4>
+            <span class="severity-tag severity-tag-high"><svg class="finding-marker" viewBox="0 0 34 9" aria-hidden="true" focusable="false"><circle cx="3.5" cy="4.5" r="3"></circle><line x1="13" y1="4.5" x2="19" y2="4.5"></line><line x1="25" y1="4.5" x2="31" y2="4.5"></line></svg>Up to High</span>
+          </div>
           <p>How much of the total supply the largest holder, and the top 10 holders together, control. The zero address and the common <code>0x…dEaD</code> burn address are left out, since tokens sent there are out of circulation.</p>
           <p>Largest holder: over 50% is <strong>High</strong>, over 20% is <strong>Medium</strong>. Top 10 combined: over 80% is <strong>Medium</strong>. When both come out Medium, they're shown as one finding.</p>
           <p>When the block explorer tags a top holder as a contract — typically a liquidity pool, bridge, or vault — the finding says so, because supply held by a pool reads very differently from supply held by a single wallet. That note explains the number; it doesn't lower the severity, and Conge only mentions it when the explorer actually tagged the address.</p>
         </div>
         <div class="check-item">
-          <h4>Holder count</h4>
+          <div class="check-item-head">
+            <h4>Holder count</h4>
+            <span class="severity-tag severity-tag-high"><svg class="finding-marker" viewBox="0 0 34 9" aria-hidden="true" focusable="false"><circle cx="3.5" cy="4.5" r="3"></circle><line x1="13" y1="4.5" x2="19" y2="4.5"></line><line x1="25" y1="4.5" x2="31" y2="4.5"></line></svg>Up to High</span>
+          </div>
           <p>How many holders the token has. Fewer than 10 is <strong>High</strong>; 10 to 99 is <strong>Medium</strong>; 100 or more passes. With very few holders, the price can be moved by a handful of wallets.</p>
         </div>
         <div class="check-item">
-          <h4>Token age</h4>
+          <div class="check-item-head">
+            <h4>Token age</h4>
+            <span class="severity-tag severity-tag-high"><svg class="finding-marker" viewBox="0 0 34 9" aria-hidden="true" focusable="false"><circle cx="3.5" cy="4.5" r="3"></circle><line x1="13" y1="4.5" x2="19" y2="4.5"></line><line x1="25" y1="4.5" x2="31" y2="4.5"></line></svg>Up to High</span>
+          </div>
           <p>How long ago the contract was deployed, from its creation transaction. Under 24 hours is <strong>High</strong>; under 7 days is <strong>Medium</strong>; older passes. Very new tokens haven't had time for problems, or scams, to surface.</p>
         </div>
         <div class="check-item">
-          <h4>Upgradeable proxy</h4>
+          <div class="check-item-head">
+            <h4>Upgradeable proxy</h4>
+            <span class="severity-tag severity-tag-high"><svg class="finding-marker" viewBox="0 0 34 9" aria-hidden="true" focusable="false"><circle cx="3.5" cy="4.5" r="3"></circle><line x1="13" y1="4.5" x2="19" y2="4.5"></line><line x1="25" y1="4.5" x2="31" y2="4.5"></line></svg>Up to High</span>
+          </div>
           <p>Whether whoever controls the contract can swap out its logic — detected from the explorer's proxy information, or from an <code>upgradeTo</code>-style function in the verified ABI.</p>
           <p>An upgradeable proxy with unverified source is <strong>High</strong>: its logic can change with no way to confirm what it would become. With verified source it's <strong>Medium</strong> — common for regulated or compliance-driven tokens, but you're trusting whoever controls upgrades. It rises to <strong>High</strong> when the upgrade admin is confirmed to be a plain wallet rather than a contract such as a multisig or timelock. If the admin's type can't be confirmed, it stays Medium rather than guessing.</p>
         </div>
         <div class="check-item">
-          <h4>Owner privileges</h4>
+          <div class="check-item-head">
+            <h4>Owner privileges</h4>
+            <span class="severity-tag severity-tag-medium"><svg class="finding-marker" viewBox="0 0 34 9" aria-hidden="true" focusable="false"><circle cx="3.5" cy="4.5" r="3"></circle><line x1="13" y1="4.5" x2="19" y2="4.5"></line><line x1="25" y1="4.5" x2="31" y2="4.5"></line></svg>Up to Medium</span>
+          </div>
           <p>For verified contracts only, the ABI is searched by function name for owner powers: minting new tokens, pausing transfers, blacklisting or blocklisting addresses, and setting fees or taxes are each <strong>Medium</strong>; setting a maximum transaction or wallet size is <strong>Low</strong>. If none are found and the contract isn't a proxy, the check passes. If the source isn't verified (or the ABI couldn't be read), this shows Unknown.</p>
         </div>
         <div class="check-item">
-          <h4>Owner</h4>
+          <div class="check-item-head">
+            <h4>Owner</h4>
+            <span class="severity-tag severity-tag-info"><svg class="finding-marker" viewBox="0 0 34 9" aria-hidden="true" focusable="false"><circle cx="3.5" cy="4.5" r="3"></circle><line x1="13" y1="4.5" x2="19" y2="4.5"></line><line x1="25" y1="4.5" x2="31" y2="4.5"></line></svg>Info only</span>
+          </div>
           <p>Who currently holds owner privileges, read via the Worker from <code>owner()</code> — or that ownership has been renounced to the zero address, meaning any owner-only functions listed above can no longer be called. This is informational and doesn't raise the risk level by itself. Renouncing ownership doesn't cover a proxy's upgrade admin, which is separate.</p>
         </div>
         <div class="check-item">
-          <h4>Sell-simulation honeypot check</h4>
+          <div class="check-item-head">
+            <h4>Sell-simulation honeypot check</h4>
+            <span class="severity-tag severity-tag-high"><svg class="finding-marker" viewBox="0 0 34 9" aria-hidden="true" focusable="false"><circle cx="3.5" cy="4.5" r="3"></circle><line x1="13" y1="4.5" x2="19" y2="4.5"></line><line x1="25" y1="4.5" x2="31" y2="4.5"></line></svg>Up to High</span>
+          </div>
           <p>A read-only simulation (an <code>eth_call</code>, never a real transaction) of whether an ordinary holder can actually sell. Conge first looks for liquidity pools among the top 5 holders by asking each contract holder for <code>token0()</code>/<code>token1()</code> — any contract that pairs this token is treated as a pool, whichever DEX it belongs to. It then simulates, from up to 2 plain-wallet top holders, a transfer of 1% of their balance to an ordinary address and to each pool found.</p>
           <p>If the ordinary transfer fails for every holder tried, it's <strong>High</strong> ("Transfers are restricted" — a pause, blacklist, or allowlist). If ordinary transfers work but every transfer to a pool fails, it's <strong>High</strong> ("Selling appears blocked" — the classic honeypot). If both succeed, it passes. If there's no pool among the top 5 holders, no eligible wallet to test from, or the RPC can't be reached, the check says so and shows Unknown — never a pass. See the limits below for what this can't catch.</p>
         </div>
         <div class="check-item">
-          <h4>Market data</h4>
+          <div class="check-item-head">
+            <h4>Market data</h4>
+            <span class="severity-tag severity-tag-info"><svg class="finding-marker" viewBox="0 0 34 9" aria-hidden="true" focusable="false"><circle cx="3.5" cy="4.5" r="3"></circle><line x1="13" y1="4.5" x2="19" y2="4.5"></line><line x1="25" y1="4.5" x2="31" y2="4.5"></line></svg>Info only</span>
+          </div>
           <p>Price, 24-hour volume, and market cap as reported by the block explorer, shown in USD for context. Informational only — it never affects the risk level.</p>
         </div>
       </div>

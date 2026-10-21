@@ -74,118 +74,199 @@
 
     <section class="card">
       <div class="faq-list">
-        <details class="faq-item">
-          <summary>Is this financial advice?</summary>
-          <p>
-            No. Conge shows automated, rule-based checks on public data — it is not financial
-            advice, and it never tells you to buy, sell, or hold anything. Always verify
-            independently before acting on anything it shows.
-          </p>
-        </details>
+        <div class="faq-item">
+          <h3 class="faq-question">
+            <button type="button" class="faq-toggle" id="faq-q-1" aria-expanded="true" aria-controls="faq-a-1">
+              <span class="faq-question-text">Is this financial advice?</span>
+              <span class="faq-icon" aria-hidden="true"></span>
+            </button>
+          </h3>
+          <div class="faq-answer" id="faq-a-1" role="region" aria-labelledby="faq-q-1">
+            <div class="faq-answer-inner">
+              <p>
+                No. Conge shows automated, rule-based checks on public data — it is not financial
+                advice, and it never tells you to buy, sell, or hold anything. Always verify
+                independently before acting on anything it shows.
+              </p>
+            </div>
+          </div>
+        </div>
 
-        <details class="faq-item">
-          <summary>Does Conge ever ask for my wallet or private key?</summary>
-          <p>
-            No. Conge is entirely read-only. It never requests a wallet connection, a signature,
-            a private key, or a transaction of any kind — it only reads public on-chain and
-            block-explorer data.
-          </p>
-        </details>
+        <div class="faq-item">
+          <h3 class="faq-question">
+            <button type="button" class="faq-toggle" id="faq-q-2" aria-expanded="true" aria-controls="faq-a-2">
+              <span class="faq-question-text">Does Conge ever ask for my wallet or private key?</span>
+              <span class="faq-icon" aria-hidden="true"></span>
+            </button>
+          </h3>
+          <div class="faq-answer" id="faq-a-2" role="region" aria-labelledby="faq-q-2">
+            <div class="faq-answer-inner">
+              <p>
+                No. Conge is entirely read-only. It never requests a wallet connection, a signature,
+                a private key, or a transaction of any kind — it only reads public on-chain and
+                block-explorer data.
+              </p>
+            </div>
+          </div>
+        </div>
 
-        <details class="faq-item">
-          <summary>Why does a scan sometimes say "Unknown"?</summary>
-          <p>
-            Because Conge would rather say it couldn't check something than guess. An Unknown
-            check never counts toward the risk level — not as a red flag, and never as a pass —
-            and each one says why. The usual reasons:
-          </p>
-          <p>
-            <strong>The shared public RPC is rate-limited.</strong> The owner and sell-simulation
-            checks read the chain through a public RPC endpoint shared by everyone using this
-            chain, and it has a tight limit. Conge already retries automatically, at both the
-            Worker and the app level, but under load these checks can still come back as "Sell
-            simulation could not complete" or "Owner unknown". That's a known limitation, not an
-            error in Conge.
-          </p>
-          <p>
-            <strong>The block explorer is slow.</strong> Under load, some Blockscout lookups —
-            contract verification and deployment time especially — can take several seconds. Each
-            one gets 10 seconds; if it doesn't answer in time (or returns an error), the checks that
-            depend on it say the block explorer couldn't be read, with the failed request under
-            <strong>Technical details</strong>.
-          </p>
-          <p>
-            <strong>There's nothing to check.</strong> Some Unknowns aren't failures at all: owner
-            privileges can't be read when the source isn't verified, and a sell can't be simulated
-            when no liquidity pool turns up among the top holders.
-          </p>
-          <p>
-            For the first two, tapping <strong>Rescan</strong> a little later usually goes
-            through.
-          </p>
-        </details>
+        <div class="faq-item">
+          <h3 class="faq-question">
+            <button type="button" class="faq-toggle" id="faq-q-3" aria-expanded="true" aria-controls="faq-a-3">
+              <span class="faq-question-text">Why does a scan sometimes say "Unknown"?</span>
+              <span class="faq-icon" aria-hidden="true"></span>
+            </button>
+          </h3>
+          <div class="faq-answer" id="faq-a-3" role="region" aria-labelledby="faq-q-3">
+            <div class="faq-answer-inner">
+              <p>
+                Because Conge would rather say it couldn't check something than guess. An Unknown
+                check never counts toward the risk level — not as a red flag, and never as a pass —
+                and each one says why. The usual reasons:
+              </p>
+              <p>
+                <strong>The shared public RPC is rate-limited.</strong> The owner and sell-simulation
+                checks read the chain through a public RPC endpoint shared by everyone using this
+                chain, and it has a tight limit. Conge already retries automatically, at both the
+                Worker and the app level, but under load these checks can still come back as "Sell
+                simulation could not complete" or "Owner unknown". That's a known limitation, not an
+                error in Conge.
+              </p>
+              <p>
+                <strong>The block explorer is slow.</strong> Under load, some Blockscout lookups —
+                contract verification and deployment time especially — can take several seconds. Each
+                one gets 10 seconds; if it doesn't answer in time (or returns an error), the checks that
+                depend on it say the block explorer couldn't be read, with the failed request under
+                <strong>Technical details</strong>.
+              </p>
+              <p>
+                <strong>There's nothing to check.</strong> Some Unknowns aren't failures at all: owner
+                privileges can't be read when the source isn't verified, and a sell can't be simulated
+                when no liquidity pool turns up among the top holders.
+              </p>
+              <p>
+                For the first two, tapping <strong>Rescan</strong> a little later usually goes
+                through.
+              </p>
+            </div>
+          </div>
+        </div>
 
-        <details class="faq-item">
-          <summary>Why is the Scan button greyed out for a few seconds after a scan?</summary>
-          <p>
-            After every scan, the Scan and Rescan buttons pause for 3 seconds and count down
-            ("Scan again in 3s"). The owner and sell-simulation checks share one public RPC with
-            everyone else on this chain, and it has a tight rate limit; a short pause keeps
-            quick repeat taps from flooding it — which would only make your next scan, and
-            everyone else's, more likely to come back Unknown. Nothing is wrong, and the buttons
-            come back on their own.
-          </p>
-        </details>
+        <div class="faq-item">
+          <h3 class="faq-question">
+            <button type="button" class="faq-toggle" id="faq-q-4" aria-expanded="true" aria-controls="faq-a-4">
+              <span class="faq-question-text">Why is the Scan button greyed out for a few seconds after a scan?</span>
+              <span class="faq-icon" aria-hidden="true"></span>
+            </button>
+          </h3>
+          <div class="faq-answer" id="faq-a-4" role="region" aria-labelledby="faq-q-4">
+            <div class="faq-answer-inner">
+              <p>
+                After every scan, the Scan and Rescan buttons pause for 3 seconds and count down
+                ("Scan again in 3s"). The owner and sell-simulation checks share one public RPC with
+                everyone else on this chain, and it has a tight rate limit; a short pause keeps
+                quick repeat taps from flooding it — which would only make your next scan, and
+                everyone else's, more likely to come back Unknown. Nothing is wrong, and the buttons
+                come back on their own.
+              </p>
+            </div>
+          </div>
+        </div>
 
-        <details class="faq-item">
-          <summary>Why won't Conge scan a particular address?</summary>
-          <p>
-            Conge only scores tokens. If the address is a wallet (no contract code), or a contract
-            that isn't a standard token — a router, a liquidity pool, or anything else without a
-            token name, symbol, and decimals — it says so and stops, rather than showing a risk
-            level that wouldn't mean anything. Double-check you copied the token's own contract
-            address. If the block explorer couldn't confirm what the address is right then, Conge
-            says that instead; trying again a moment later usually works.
-          </p>
-        </details>
+        <div class="faq-item">
+          <h3 class="faq-question">
+            <button type="button" class="faq-toggle" id="faq-q-5" aria-expanded="true" aria-controls="faq-a-5">
+              <span class="faq-question-text">Why won't Conge scan a particular address?</span>
+              <span class="faq-icon" aria-hidden="true"></span>
+            </button>
+          </h3>
+          <div class="faq-answer" id="faq-a-5" role="region" aria-labelledby="faq-q-5">
+            <div class="faq-answer-inner">
+              <p>
+                Conge only scores tokens. If the address is a wallet (no contract code), or a contract
+                that isn't a standard token — a router, a liquidity pool, or anything else without a
+                token name, symbol, and decimals — it says so and stops, rather than showing a risk
+                level that wouldn't mean anything. Double-check you copied the token's own contract
+                address. If the block explorer couldn't confirm what the address is right then, Conge
+                says that instead; trying again a moment later usually works.
+              </p>
+            </div>
+          </div>
+        </div>
 
-        <details class="faq-item">
-          <summary>Is Conge affiliated with Robinhood?</summary>
-          <p>
-            No. Conge is not affiliated with, endorsed by, or connected to Robinhood Markets,
-            Inc. in any way. It's an independent project that happens to support Robinhood
-            Chain, a network operated by someone else.
-          </p>
-        </details>
+        <div class="faq-item">
+          <h3 class="faq-question">
+            <button type="button" class="faq-toggle" id="faq-q-6" aria-expanded="true" aria-controls="faq-a-6">
+              <span class="faq-question-text">Is Conge affiliated with Robinhood?</span>
+              <span class="faq-icon" aria-hidden="true"></span>
+            </button>
+          </h3>
+          <div class="faq-answer" id="faq-a-6" role="region" aria-labelledby="faq-q-6">
+            <div class="faq-answer-inner">
+              <p>
+                No. Conge is not affiliated with, endorsed by, or connected to Robinhood Markets,
+                Inc. in any way. It's an independent project that happens to support Robinhood
+                Chain, a network operated by someone else.
+              </p>
+            </div>
+          </div>
+        </div>
 
-        <details class="faq-item">
-          <summary>Is the code open source?</summary>
-          <p>
-            No — the repository is private right now. You don't have to take that on
-            faith, though: everything Conge does runs in your own browser, reading public
-            Blockscout data and, through its read-only Worker relay, the chain's public RPC
-            — so you can open your browser's network tab and watch exactly what it requests
-            and where.
-          </p>
-        </details>
+        <div class="faq-item">
+          <h3 class="faq-question">
+            <button type="button" class="faq-toggle" id="faq-q-7" aria-expanded="true" aria-controls="faq-a-7">
+              <span class="faq-question-text">Is the code open source?</span>
+              <span class="faq-icon" aria-hidden="true"></span>
+            </button>
+          </h3>
+          <div class="faq-answer" id="faq-a-7" role="region" aria-labelledby="faq-q-7">
+            <div class="faq-answer-inner">
+              <p>
+                No — the repository is private right now. You don't have to take that on
+                faith, though: everything Conge does runs in your own browser, reading public
+                Blockscout data and, through its read-only Worker relay, the chain's public RPC
+                — so you can open your browser's network tab and watch exactly what it requests
+                and where.
+              </p>
+            </div>
+          </div>
+        </div>
 
-        <details class="faq-item">
-          <summary>How is risk level decided?</summary>
-          <p>
-            By a fixed set of transparent, rule-based checks — no model, no hidden scoring. The
-            overall level is the worst result among the checks that actually produced data. See
-            <a href="how-it-works.html">how it works</a> for the full list of checks, their exact
-            thresholds, and what each level means.
-          </p>
-        </details>
+        <div class="faq-item">
+          <h3 class="faq-question">
+            <button type="button" class="faq-toggle" id="faq-q-8" aria-expanded="true" aria-controls="faq-a-8">
+              <span class="faq-question-text">How is risk level decided?</span>
+              <span class="faq-icon" aria-hidden="true"></span>
+            </button>
+          </h3>
+          <div class="faq-answer" id="faq-a-8" role="region" aria-labelledby="faq-q-8">
+            <div class="faq-answer-inner">
+              <p>
+                By a fixed set of transparent, rule-based checks — no model, no hidden scoring. The
+                overall level is the worst result among the checks that actually produced data. See
+                <a href="how-it-works.html">how it works</a> for the full list of checks, their exact
+                thresholds, and what each level means.
+              </p>
+            </div>
+          </div>
+        </div>
 
-        <details class="faq-item">
-          <summary>What chain does Conge support?</summary>
-          <p>
-            Robinhood Chain mainnet (chain ID 4663) only, for now. Support for other chains isn't
-            currently planned but could be added later.
-          </p>
-        </details>
+        <div class="faq-item">
+          <h3 class="faq-question">
+            <button type="button" class="faq-toggle" id="faq-q-9" aria-expanded="true" aria-controls="faq-a-9">
+              <span class="faq-question-text">What chain does Conge support?</span>
+              <span class="faq-icon" aria-hidden="true"></span>
+            </button>
+          </h3>
+          <div class="faq-answer" id="faq-a-9" role="region" aria-labelledby="faq-q-9">
+            <div class="faq-answer-inner">
+              <p>
+                Robinhood Chain mainnet (chain ID 4663) only, for now. Support for other chains isn't
+                currently planned but could be added later.
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   </main>
@@ -228,6 +309,7 @@
     document.getElementById("footer-year").textContent = new Date().getFullYear();
   </script>
   <script src="nav.js" defer></script>
+  <script src="faq.js" defer></script>
   <script src="scroll-fx.js" defer></script>
 </body>
 </html>

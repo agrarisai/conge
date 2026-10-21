@@ -108,6 +108,12 @@ const rows = [
   ["Passed tint pair (neutral text on neutral tint) — token, not rendered", T("tone-neutral-text"), T("tone-neutral-bg"), "text"],
   ["Info/unknown tint pair (unknown text on unknown tint) — token, not rendered", T("tone-unknown-text"), T("tone-unknown-bg"), "text"],
   ["'Connection failed' status (rose text) on white card", T("tone-rose-text"), WHITE, "text"],
+  ["How it works severity tag: High (rose text on rose tint)", T("tone-rose-text"), T("tone-rose-bg"), "text"],
+  ["How it works severity tag: Medium (amber text on amber tint)", T("tone-amber-text"), T("tone-amber-bg"), "text"],
+  ["How it works severity tag: Low (green text on green tint)", T("tone-green-text"), T("tone-green-bg"), "text"],
+  ["How it works severity tag: Info (slate on neutral tint)", T("color-slate"), T("tone-neutral-bg"), "text"],
+  ["FAQ question text (ink) on white card", T("color-ink"), WHITE, "text"],
+  ["FAQ question hover (slate) on white card", T("color-slate"), WHITE, "text"],
   // Blue accent
   ["Raw accent #0B84F3 as text on ivory (not used as text)", T("color-accent"), IVORY, "info"],
   ["Raw accent #0B84F3 as text on white (not used as text)", T("color-accent"), WHITE, "info"],
