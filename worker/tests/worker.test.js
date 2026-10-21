@@ -20,6 +20,8 @@ import worker, {
   MAX_UPSTREAM_ATTEMPTS,
   RETRY_DELAYS_MS,
   UPSTREAM_TIMEOUT_MS,
+  HEALTH_CACHE_MS,
+  resetHealthCache,
 } from "../index.js";
 
 const SITE_ORIGIN = "https://agrarisai.github.io";
@@ -372,6 +374,150 @@ test("full request handler: a real POST from a disallowed origin is rejected wit
   assert.equal(response.status, 403);
   assert.equal(response.headers.get("access-control-allow-origin"), null);
   assert.equal(upstreamWasCalled, false);
+});
+
+// --- Forged origins on the actual POST (not just the preflight) -----------
+//
+// CORS headers only stop a *browser* from reading a cross-origin response;
+// a script or curl can send any Origin header (or none) and never does a
+// preflight. So the origin check must be enforced server-side on the POST
+// itself, before the body is read or any upstream work happens. Each case
+// here is a direct, non-preflight POST that a script could send.
+
+const FORGED_ORIGINS = [
+  ["no Origin header at all (curl's default)", null],
+  ['the literal "null" origin (sandboxed iframes, file://)', "null"],
+  ["an unrelated site", "https://evil.example"],
+  ["the right host over http", "http://agrarisai.github.io"],
+  ["a look-alike suffix domain", "https://agrarisai.github.io.evil.example"],
+  ["a look-alike prefix domain", "https://evil-agrarisai.github.io"],
+  ["a different GitHub Pages user", "https://someone-else.github.io"],
+  ["the right origin with a trailing slash", "https://agrarisai.github.io/"],
+  ["the right origin with a path", "https://agrarisai.github.io/conge"],
+  ["the right origin with a port", "https://agrarisai.github.io:443"],
+  ["different letter case", "https://AgrarisAI.github.io"],
+  ["a localhost dev origin", "http://localhost:8080"],
+];
+
+for (const [label, forgedOrigin] of FORGED_ORIGINS) {
+  test(`forged origin on a real (non-preflight) POST is rejected with 403 before any upstream work: ${label}`, async (t) => {
+    const originalFetch = globalThis.fetch;
+    let upstreamCalls = 0;
+    globalThis.fetch = async () => {
+      upstreamCalls++;
+      throw new Error("upstream must never be called for a forged origin");
+    };
+    t.after(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    const headers = { "Content-Type": "application/json" };
+    if (forgedOrigin !== null) headers.Origin = forgedOrigin;
+    const response = await worker.fetch(
+      new Request(WORKER_URL, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+      }),
+    );
+
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.get("access-control-allow-origin"), null);
+    assert.deepEqual(await response.json(), { error: "Origin not allowed" });
+    assert.equal(upstreamCalls, 0);
+  });
+}
+
+test("forged origin: a POST that looks like a browser's (Referer, Sec-Fetch-*, User-Agent) but carries a foreign Origin is still rejected", async (t) => {
+  const originalFetch = globalThis.fetch;
+  let upstreamCalls = 0;
+  globalThis.fetch = async () => {
+    upstreamCalls++;
+    throw new Error("upstream must never be called");
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  // Only Origin is trusted for the decision — the other headers a script
+  // can copy from a real browser request must not let it through.
+  const response = await worker.fetch(
+    new Request(WORKER_URL, {
+      method: "POST",
+      headers: {
+        Origin: "https://evil.example",
+        Referer: "https://agrarisai.github.io/conge/",
+        "Sec-Fetch-Site": "cross-site",
+        "Sec-Fetch-Mode": "cors",
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify([
+        { jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] },
+        { jsonrpc: "2.0", id: 2, method: "eth_blockNumber", params: [] },
+      ]),
+    }),
+  );
+  assert.equal(response.status, 403);
+  assert.equal(upstreamCalls, 0);
+});
+
+// --- /health can't be used to amplify upstream load ------------------------
+//
+// /health is intentionally open to any caller (no Origin check — it's a
+// one-tap diagnostic opened as a plain browser tab). It therefore shares a
+// single upstream check for HEALTH_CACHE_MS, so hammering it can't turn
+// into one upstream round-trip per hit.
+
+function stubHealthyUpstream(t) {
+  const originalFetch = globalThis.fetch;
+  const state = { calls: 0 };
+  globalThis.fetch = async () => {
+    state.calls++;
+    return new Response(
+      JSON.stringify([
+        { jsonrpc: "2.0", id: 1, result: "0x1237" },
+        { jsonrpc: "2.0", id: 2, result: "0x10" },
+      ]),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    resetHealthCache();
+  });
+  resetHealthCache();
+  return state;
+}
+
+test("/health: 20 rapid requests from a script share one upstream check", async (t) => {
+  const upstream = stubHealthyUpstream(t);
+  const responses = await Promise.all(
+    Array.from({ length: 20 }, () => worker.fetch(new Request(`${WORKER_URL}health`))),
+  );
+  for (const r of responses) {
+    assert.equal(r.status, 200);
+    assert.deepEqual(await r.json(), { ok: true, upstream: { reachable: true, chainId: 4663, blockNumber: 16 } });
+  }
+  assert.equal(upstream.calls, 1);
+  assert.equal(responses[0].headers.get("cache-control"), `public, max-age=${HEALTH_CACHE_MS / 1000}`);
+});
+
+test("/health: a fresh upstream check happens once the shared window has passed", async (t) => {
+  const upstream = stubHealthyUpstream(t);
+  const realNow = Date.now;
+  t.after(() => {
+    Date.now = realNow;
+  });
+  const start = realNow();
+  Date.now = () => start;
+  await worker.fetch(new Request(`${WORKER_URL}health`));
+  Date.now = () => start + HEALTH_CACHE_MS - 1;
+  await worker.fetch(new Request(`${WORKER_URL}health`));
+  assert.equal(upstream.calls, 1);
+  Date.now = () => start + HEALTH_CACHE_MS;
+  await worker.fetch(new Request(`${WORKER_URL}health`));
+  assert.equal(upstream.calls, 2);
 });
 
 // --- Upstream rate-limit retry ---------------------------------------------

@@ -118,6 +118,8 @@ const rows = [
   ["Focus ring (accent) on ivory", T("color-accent"), IVORY, "ui"],
   ["Focus ring (accent) on white card", T("color-accent"), WHITE, "ui"],
   ["Secondary button label (ink) on white card", T("color-ink"), WHITE, "text"],
+  ["Scan button cooldown countdown (slate on neutral tint)", T("color-slate"), T("tone-neutral-bg"), "text"],
+  ["Rescan button cooldown countdown (slate on white card)", T("color-slate"), WHITE, "text"],
   // Navigation
   ["Menu: current page (accent-text) on panel (ivory)", T("color-accent-text"), IVORY, "text"],
   ["Menu: other links (ink) on panel (ivory)", T("color-ink"), IVORY, "text"],

@@ -390,18 +390,31 @@ async function handleRpc(request, origin) {
 
 // GET /health is deliberately NOT origin-restricted: it's meant to be
 // opened directly in a browser tab (a top-level navigation, which isn't
-// subject to CORS in the first place) as a one-tap diagnostic. It returns
-// no secrets — just whether the upstream RPC is reachable right now.
-async function handleHealth() {
+// subject to CORS — and doesn't even send an Origin header — in the first
+// place) as a one-tap diagnostic. It returns no secrets — just whether the
+// upstream RPC is reachable right now.
+//
+// Because anyone can call it, it must not be a way to amplify load on the
+// shared, rate-limited upstream RPC: one upstream check is shared by every
+// /health request for HEALTH_CACHE_MS — including ones that arrive while
+// that check is still in flight — so a burst of hits costs at most one
+// pair of upstream calls per window (per Worker isolate), not two per hit.
+export const HEALTH_CACHE_MS = 15_000;
+let healthCheck = null; // { startedAt, promise } of the shared upstream check
+
+// For tests only: forget the shared check so each test starts fresh.
+export function resetHealthCache() {
+  healthCheck = null;
+}
+
+async function checkUpstreamHealth() {
   const outcome = await callUpstream([
     { jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] },
     { jsonrpc: "2.0", id: 2, method: "eth_blockNumber", params: [] },
   ]);
 
-  const headers = { "Access-Control-Allow-Origin": "*" };
-
   if (!outcome.ok) {
-    return jsonResponse({ ok: false, upstream: { reachable: false }, error: outcome.detail }, 200, headers);
+    return { ok: false, upstream: { reachable: false }, error: outcome.detail };
   }
 
   const results = Array.isArray(outcome.body) ? outcome.body : [outcome.body];
@@ -410,17 +423,31 @@ async function handleHealth() {
   const rpcError = chainIdResult?.error || blockNumberResult?.error;
 
   if (rpcError) {
-    return jsonResponse(
-      { ok: false, upstream: { reachable: true, chainId: null, blockNumber: null }, error: rpcError.message },
-      200,
-      headers,
-    );
+    return { ok: false, upstream: { reachable: true, chainId: null, blockNumber: null }, error: rpcError.message };
   }
 
   const chainId = typeof chainIdResult?.result === "string" ? parseInt(chainIdResult.result, 16) : null;
   const blockNumber = typeof blockNumberResult?.result === "string" ? parseInt(blockNumberResult.result, 16) : null;
 
-  return jsonResponse({ ok: true, upstream: { reachable: true, chainId, blockNumber } }, 200, headers);
+  return { ok: true, upstream: { reachable: true, chainId, blockNumber } };
+}
+
+async function handleHealth(now = Date.now()) {
+  if (!healthCheck || now - healthCheck.startedAt >= HEALTH_CACHE_MS) {
+    // Never cache a rejection: an unexpected throw becomes an honest
+    // "unreachable" body like any other upstream failure.
+    const promise = checkUpstreamHealth().catch((error) => ({
+      ok: false,
+      upstream: { reachable: false },
+      error: error?.message || String(error),
+    }));
+    healthCheck = { startedAt: now, promise };
+  }
+  const body = await healthCheck.promise;
+  return jsonResponse(body, 200, {
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": `public, max-age=${HEALTH_CACHE_MS / 1000}`,
+  });
 }
 
 // --- Entry point -----------------------------------------------------------

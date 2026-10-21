@@ -23,18 +23,26 @@ secrets, no KV/D1, and it never logs request bodies.
     through to the upstream untouched — it's not validated, since its
     shape is caller-defined.
   - Request bodies over 20 KB are rejected before they're parsed.
-  - CORS is restricted to `https://agrarisai.github.io` — no wildcard.
-    Any other origin gets `403`, including the `OPTIONS` preflight.
+  - Requests are restricted to the origin `https://agrarisai.github.io`,
+    with no wildcard. This is enforced **server-side**, not just through CORS
+    headers. Any POST whose `Origin` isn't exactly that, including one with
+    no `Origin` at all (curl's default), gets `403` before the body is read
+    or anything reaches the upstream. The `OPTIONS` preflight is checked the
+    same way. CORS headers alone would only stop a *browser* from reading
+    the response; they don't stop a script from sending the request.
   - The Worker enforces an 8 second timeout on the upstream call. If the
     upstream fails, times out, or returns something that isn't valid
     JSON, the Worker responds `502` with `{"error": "...", "detail":
     "..."}` describing what went wrong.
 - **`GET /health`** — calls `eth_chainId` and `eth_blockNumber` upstream
-  and reports whether the RPC is reachable right now. Unlike `POST /`,
-  this endpoint is **not** origin-restricted — it's meant to be opened
-  directly in a phone browser as a one-tap diagnostic (a plain top-level
-  navigation isn't subject to CORS in the first place), and it returns no
-  secrets, just status.
+  and reports whether the RPC is reachable. Unlike `POST /`, this endpoint
+  is **not** origin-restricted, and it returns no secrets, just status. It's
+  meant to be opened directly in a phone browser as a one-tap diagnostic: a
+  plain top-level navigation isn't subject to CORS and sends no `Origin`.
+  Because anyone can call it, one upstream check is shared by every
+  `/health` request for 15 seconds, including requests that arrive while the
+  check is still running. Hammering it therefore can't multiply load on the
+  shared upstream RPC.
 - It never holds funds, signs anything, or writes any state — the
   allowed methods are all reads.
 
@@ -95,25 +103,93 @@ curl -i -X POST https://conge-rpc.<your-subdomain>.workers.dev/ \
 
 A batch works the same way, as a JSON array of up to 10 request objects.
 
-## Rate limiting
+## Abuse protection and rate limiting
 
-This Worker has no built-in rate limiting of its own (Cloudflare's free
-Workers plan doesn't include one out of the box, and adding home-grown
-limiting would mean state — KV or Durable Objects — which this project
-deliberately avoids for a thin proxy). If it ever needs one, add a
-**Cloudflare WAF rate limiting rule** in front of it instead of changing
-the code:
+The upstream RPC is a shared, rate-limited resource, so the Worker and the
+site protect it in layers:
 
-1. In the dashboard, open the zone/domain this Worker is routed on (or,
-   for a plain `*.workers.dev` URL, Cloudflare rate limiting rules apply
-   at the account/zone level — check what's available on your plan).
-2. Go to **Security → WAF → Rate limiting rules** and create a rule
-   matching this Worker's path, e.g. requests per IP per minute to
-   `conge-rpc.<your-subdomain>.workers.dev/*`.
-3. Set an action (block, or a challenge) once the threshold is exceeded.
+- **Server-side origin check (in code).** Only `https://agrarisai.github.io`
+  is accepted. Any other `Origin`, or none, gets `403` before any upstream
+  work. `worker/tests/worker.test.js` covers forged origins on the actual
+  POST: no Origin, `null`, look-alike domains, the wrong scheme, a trailing
+  slash or path, a port, different letter case, and browser-like headers
+  around a foreign Origin.
+- **What the origin check can't do.** A script can send the *exact*
+  allowed header, `Origin: https://agrarisai.github.io`. No origin check
+  can tell that apart from the real site, so a per-IP rate limit (below)
+  is the backstop for scripted abuse.
+- **`/health` is shared (in code).** One upstream check serves every
+  `/health` request for 15 seconds.
+- **Client cooldown (in the site).** After each scan, the Scan and Rescan
+  buttons stay disabled for 3 seconds with a visible countdown. This
+  prevents accidental rapid re-scans.
+- **Per-IP rate limiting (Cloudflare dashboard, manual).** This is described
+  below. The Worker has no built-in limiter of its own: that would need
+  state (KV or Durable Objects), which this thin proxy deliberately avoids.
 
-This keeps rate limiting as infrastructure configuration, not application
-code — the Worker itself stays a stateless, dependency-free proxy.
+### Adding a Cloudflare Rate Limiting Rule (manual dashboard step)
+
+> **This is a manual step in the Cloudflare dashboard. It is not deployed
+> from this repository's code**, and nothing in the repo can create or
+> change it. Re-check it if the Worker's hostname ever changes.
+
+**Prerequisite: the Worker must be on a hostname in a zone you own.**
+WAF rules, including rate limiting rules, attach to a *zone* (your own
+domain). They can't be added to a `*.workers.dev` URL, because Cloudflare
+owns that zone.
+
+1. Add your domain to Cloudflare, if it isn't already. The Free plan is
+   enough.
+2. Go to **Workers & Pages → `conge-rpc` → Settings → Domains & Routes →
+   Add → Custom domain**, and enter a hostname such as
+   `rpc.yourdomain.com`.
+3. In the site's `app.js`, change `WORKER_URL` to that hostname. The
+   Worker's `ALLOWED_ORIGINS` doesn't change: it lists the *site's* origin,
+   not the Worker's.
+4. Back in **Domains & Routes**, **disable the `workers.dev` route**.
+   Otherwise the old `conge-rpc.<subdomain>.workers.dev` URL keeps working
+   and bypasses the rule.
+
+**Create the rule:**
+
+5. Select your domain (the zone) in the dashboard, then go to
+   **Security → WAF → Rate limiting rules → Create rule**. In the newer
+   dashboard this is **Security → Security rules → Create rule → Rate
+   limiting rule**.
+6. **Rule name:** `conge-rpc per-IP limit`.
+7. **If incoming requests match:** Field `Hostname`, operator `equals`,
+   value `rpc.yourdomain.com`. This covers both `POST /` and `GET /health`.
+8. **With the same characteristics:** `IP`. On the Free plan, IP is the
+   only option.
+9. **When rate exceeds:**
+   - **Pro plan and above:** `20` requests per `1 minute`. This is the
+     recommended starting point.
+   - **Free plan:** the period is fixed at `10 seconds`, so use `10`
+     requests per `10 seconds`. That allows one full scan with retries, but
+     stops a script within seconds.
+10. **Then take action:** `Block`, with a short **duration**: `1 minute` on
+    paid plans, or `10 seconds` on Free, where it's fixed.
+11. **Deploy.**
+
+Plan limits change over time. If a field above isn't editable, the
+dashboard's rule editor shows what your plan allows.
+
+**Why these numbers.**
+- **Normal scan:** about 3–4 POSTs to the Worker: the owner check, one
+  pool-detection batch, and one or two sell-simulation batches.
+- **Page load:** one connection probe.
+- **Worst case:** with every client-side retry firing, a scan peaks at
+  about 10–12 POSTs.
+- **The 3-second cooldown** spaces out repeated scans from one visitor.
+
+A real visitor won't hit either limit; a script looping requests will.
+
+**What a blocked visitor sees.** Cloudflare's block response (HTTP 429)
+carries no CORS headers, so the browser reports it as a network error. In
+the site, the owner and sell-simulation checks show their honest "Unknown"
+state with Technical details. That's the same degraded state as when the
+upstream RPC itself is rate-limiting. Blockscout-based checks are
+unaffected, because they don't go through this Worker.
 
 ## Testing
 

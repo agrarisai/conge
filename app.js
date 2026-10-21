@@ -1126,6 +1126,41 @@ function setScanBusy(isBusy) {
   rescanButtonLabelEl.textContent = isBusy ? "Scanning…" : "Rescan";
 }
 
+// A short cooldown after every scan that reached the network — result or
+// error alike — before another can start, so one visitor can't
+// accidentally fire rapid back-to-back scans at the shared, rate-limited
+// Worker/RPC. The buttons stay disabled and show a live countdown ("Scan
+// again in 3s") rather than silently ignoring taps. A typed address that
+// fails validation never reaches the network, so it doesn't start one.
+const SCAN_COOLDOWN_MS = 3000;
+let scanCooldownTimer = null;
+
+function startScanCooldown() {
+  clearInterval(scanCooldownTimer);
+  const until = Date.now() + SCAN_COOLDOWN_MS;
+  scanButton.disabled = true;
+  rescanButton.disabled = true;
+  exampleScanButton.disabled = true;
+  scanButton.classList.add("is-cooling-down");
+  rescanButton.classList.add("is-cooling-down");
+
+  const tick = () => {
+    const secondsLeft = Math.ceil((until - Date.now()) / 1000);
+    if (secondsLeft > 0) {
+      scanButtonLabelEl.textContent = `Scan again in ${secondsLeft}s`;
+      rescanButtonLabelEl.textContent = `Rescan in ${secondsLeft}s`;
+      return;
+    }
+    clearInterval(scanCooldownTimer);
+    scanCooldownTimer = null;
+    scanButton.classList.remove("is-cooling-down");
+    rescanButton.classList.remove("is-cooling-down");
+    setScanBusy(false);
+  };
+  tick();
+  scanCooldownTimer = setInterval(tick, 250);
+}
+
 // Findings are grouped by outcome, not just severity: a check that
 // genuinely passed ("info" severity, known data) reads very differently
 // from a check whose data simply wasn't available ("Unknown") — grouping
@@ -2001,7 +2036,8 @@ async function scanToken(rawAddress) {
     // A newer scan has taken over (its own setScanBusy/URL handling
     // applies) — leave both alone so this one can't un-busy it.
     if (isCurrentScan()) {
-      setScanBusy(false);
+      // Buttons stay disabled through the cooldown; it re-enables them.
+      startScanCooldown();
       timer.report();
       // The scan has finished — with a result, or with a clear error such
       // as "this is a wallet address" — so the current URL now reproduces
@@ -2113,6 +2149,9 @@ async function shareScanLink() {
 
 scanForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  // Pressing Enter in the field submits the form even while the Scan
+  // button is disabled (scanning, or in its visible cooldown countdown).
+  if (scanButton.disabled) return;
   scanToken(tokenAddressInput.value);
 });
 
