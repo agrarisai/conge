@@ -490,7 +490,7 @@ either. It's built entirely with plain CSS custom properties in
     scrolled to — nothing on this site animates in on scroll except this:
     a dot-and-dash mark (the same marker a signal-list finding uses)
     sweeps across a hairline divider between the Network status and Scan
-    a token cards. The same 1.2s sweep repeats every ~4 seconds for as
+    a token cards. The same calm 2.4s sweep repeats about every 3.2 seconds for as
     long as that divider is on screen. An `IntersectionObserver` pauses
     the loop (nothing runs) while the divider is scrolled out of view, or
     the tab is in the background, and resumes it when it's back. Every

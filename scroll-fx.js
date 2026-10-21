@@ -7,8 +7,8 @@
 //    texture drifts at a fraction of scroll speed for a sense of depth.
 // 2. One orchestrated moment, index.html only: a dot-and-dash mark (the
 //    same marker style as a signal-list finding) sweeps across the
-//    divider between the hero and the scan section — repeating every few
-//    seconds for as long as that divider is on screen, and pausing while
+//    divider between the hero and the scan section — repeating as a calm,
+//    steady pulse for as long as that divider is on screen, and pausing while
 //    it's scrolled out of view or the tab is in the background.
 //
 // Both are skipped under prefers-reduced-motion — the background then
@@ -55,7 +55,7 @@
 
   // --- Scroll sweep (index.html only; absent elsewhere) ---------------
   // Loops while the divider is visible: each sweep is the same single
-  // 1.2s CSS animation (see .scroll-sweep in style.css), replayed
+  // 2.4s CSS animation (see .scroll-sweep in style.css), replayed
   // SWEEP_GAP_MS after the previous one finishes, so the motion itself —
   // speed, easing, dash pattern — is exactly what it always was. Nothing
   // runs while the divider is off-screen or the tab is hidden; it starts
@@ -63,7 +63,10 @@
   var sweepEl = document.getElementById("scroll-sweep");
   if (sweepEl && !reduceMotion && "IntersectionObserver" in window) {
     var markEl = sweepEl.querySelector(".scroll-sweep-mark");
-    var SWEEP_GAP_MS = 2800; // pause between sweeps: one every ~4s
+    // Pause between sweeps. Short enough that the loop reads as a steady
+    // pulse (one sweep about every 3.2s, moving for 75% of that), long
+    // enough to leave a beat of rest so it never feels continuous.
+    var SWEEP_GAP_MS = 800;
     var inView = false;
     var gapTimer = null;
 
