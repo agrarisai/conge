@@ -702,10 +702,19 @@ changes needed as long as the filename stays the same.
 
 Add `?debug=timing` to the page URL (or run
 `localStorage.setItem("conge:debug-timing", "1")` in the console to keep
-it on) and every scan prints a `console.table` of its stages. Times are in
-ms since Scan was tapped: each Blockscout call, **First render** (all
-Blockscout data shown), the Worker owner and sell-simulation checks, and
-**Final verdict shown**. Nothing is logged without the flag.
+it on). Every scan then reports its stages, in ms since Scan was tapped:
+each Blockscout call, **First render** (all Blockscout data shown), the
+Worker owner and sell-simulation checks, and **Final verdict shown**.
+
+- **On a phone (easiest):** just open the page with `?debug=timing`. A
+  small dark debug panel is pinned to the bottom of the screen and fills
+  in live as each stage finishes. Tap its header to collapse or expand it.
+  No console needed. The flag survives scans and "Copy link", so
+  `…/?address=0x…&debug=timing` reproduces a scan with timing in one tap.
+- **On desktop:** the same data is also printed as a `console.table` in
+  the browser console.
+
+Without the flag there is no panel and nothing is logged.
 
 All Blockscout calls start as early as their own inputs allow. The four
 primary lookups (`/addresses`, `/tokens`, `/smart-contracts`,

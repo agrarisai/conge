@@ -1485,3 +1485,62 @@ input[type="text"]::placeholder {
     max-width: 300px;
   }
 }
+
+/* --- Debug timing overlay (only exists with ?debug=timing) -----------
+   Deliberately NOT styled like the site: a plain dark, semi-transparent,
+   monospace overlay so it reads unmistakably as a developer tool. Fixed
+   to the bottom, collapsible via <details>, above every site layer. */
+.debug-timing-panel {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  z-index: 1000;
+  max-height: 45vh;
+  overflow: auto;
+  padding: 0 8px 6px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 86%);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  color: #f2f2f2;
+  font: 11px/1.4 var(--font-mono);
+}
+
+.debug-timing-panel summary {
+  padding: 13px 0;
+  line-height: 18px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.debug-timing-panel summary:focus-visible {
+  outline: 2px solid #ffd54a;
+  outline-offset: -2px;
+}
+
+.debug-timing-panel table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.debug-timing-panel th,
+.debug-timing-panel td {
+  padding: 2px 4px;
+  text-align: right;
+  font-weight: normal;
+  vertical-align: top;
+}
+
+.debug-timing-panel th:first-child,
+.debug-timing-panel td:first-child {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.debug-timing-panel th {
+  color: #b8b8b8;
+  border-bottom: 1px solid rgb(255 255 255 / 25%);
+}

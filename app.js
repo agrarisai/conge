@@ -130,10 +130,68 @@ const DEBUG_TIMING = (() => {
   }
 })();
 
-function createScanTimer() {
+// On-page debug overlay mirroring the console table, for phones where the
+// console isn't reachable. Built only when DEBUG_TIMING is on — normal
+// visitors get no extra DOM. A <details> element so it can be collapsed
+// out of the way; it fills in live as each stage finishes.
+let debugPanel = null;
+
+function getDebugPanel() {
+  if (!DEBUG_TIMING) return null;
+  if (debugPanel) return debugPanel;
+
+  const root = document.createElement("details");
+  root.className = "debug-timing-panel";
+  root.open = true;
+
+  const summary = document.createElement("summary");
+  const status = document.createElement("span");
+  status.textContent = "waiting for a scan…";
+  summary.append("debug · scan timing · ", status);
+
+  const table = document.createElement("table");
+  const head = table.createTHead().insertRow();
+  for (const label of ["stage", "start", "end", "ms"]) {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.textContent = label;
+    head.appendChild(th);
+  }
+  const body = table.createTBody();
+
+  root.append(summary, table);
+  document.body.appendChild(root);
+  debugPanel = { status, body };
+  return debugPanel;
+}
+
+function renderDebugPanel(statusText, rows) {
+  const panel = getDebugPanel();
+  if (!panel) return;
+  panel.status.textContent = statusText;
+  panel.body.replaceChildren(
+    ...[...rows]
+      .sort((a, b) => a.end_ms - b.end_ms)
+      .map((r) => {
+        const tr = document.createElement("tr");
+        for (const value of [r.stage, r.start_ms, r.end_ms, r.duration_ms]) {
+          tr.insertCell().textContent = String(value);
+        }
+        return tr;
+      }),
+  );
+}
+
+function createScanTimer(address) {
   const t0 = performance.now();
   const rows = [];
   const ms = (t) => Math.round(t - t0);
+  const shortAddress = `${address.slice(0, 6)}…${address.slice(-4)}`;
+  const record = (row) => {
+    rows.push(row);
+    renderDebugPanel(`${shortAddress} · running…`, rows);
+  };
+  renderDebugPanel(`${shortAddress} · running…`, rows);
   return {
     // Times one awaited step, recording when it started and finished
     // relative to the start of the scan.
@@ -143,16 +201,18 @@ function createScanTimer() {
         return await promise;
       } finally {
         const end = performance.now();
-        rows.push({ stage, start_ms: ms(start), end_ms: ms(end), duration_ms: Math.round(end - start) });
+        record({ stage, start_ms: ms(start), end_ms: ms(end), duration_ms: Math.round(end - start) });
       }
     },
     // Records a point-in-time milestone (e.g. first render).
     mark(stage) {
       const now = performance.now();
-      rows.push({ stage, start_ms: 0, end_ms: ms(now), duration_ms: ms(now) });
+      record({ stage, start_ms: 0, end_ms: ms(now), duration_ms: ms(now) });
     },
-    report(address) {
-      if (!DEBUG_TIMING || rows.length === 0) return;
+    report() {
+      if (!DEBUG_TIMING) return;
+      renderDebugPanel(`${shortAddress} · done`, rows);
+      if (rows.length === 0) return;
       console.info(`[Conge] scan timing for ${address} (ms since Scan was tapped)`);
       console.table([...rows].sort((a, b) => a.end_ms - b.end_ms));
     },
@@ -1428,7 +1488,7 @@ async function scanToken(rawAddress) {
   lastScannedTokenAddress = address;
 
   setScanBusy(true);
-  const timer = createScanTimer();
+  const timer = createScanTimer(address);
 
   try {
     // Every Blockscout call starts as early as its own inputs allow, so
@@ -1695,7 +1755,7 @@ async function scanToken(rawAddress) {
     timer.mark("Final verdict shown");
   } finally {
     setScanBusy(false);
-    timer.report(address);
+    timer.report();
     // The scan has finished — with a result, or with a clear error such
     // as "this is a wallet address" — so the current URL now reproduces
     // it. Covers every exit path of the try block above.
@@ -1832,6 +1892,10 @@ exampleScanButton.addEventListener("click", () => {
 // --- Init ---------------------------------------------------------------
 
 checkNetworkStatus();
+
+// Show the (empty) debug panel straight away when the flag is on, so it's
+// clear debug mode is active before the first scan.
+getDebugPanel();
 
 // A shared scan link (?address=0x…) reproduces its scan immediately.
 const sharedAddress = addressFromUrl();
