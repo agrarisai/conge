@@ -97,6 +97,21 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Top-level Worker jobs that can be triggered independently of each other
+// — the page-load connection probe, and a scan's owner() check and sell
+// simulation — run one at a time through this queue, so they never hit
+// the shared rate-limited upstream RPC at the same moment (e.g. a shared
+// scan link loading: the probe and the scan's owner() check would
+// otherwise start together). It only orders whole jobs; the spacing,
+// retries and backoff inside each job are untouched. Nothing
+// Blockscout-bound goes through here.
+let workerQueue = Promise.resolve();
+function enqueueWorkerJob(job) {
+  const run = workerQueue.then(job, job);
+  workerQueue = run.catch(() => {});
+  return run;
+}
+
 // An arbitrary, unfunded placeholder address with no special meaning to
 // any token or protocol — used only as the baseline transfer-simulation
 // recipient in the sell-simulation honeypot check below. eth_call never
@@ -219,10 +234,29 @@ function createScanTimer(address) {
   const rows = [];
   const ms = (t) => Math.round(t - t0);
   const shortAddress = `${address.slice(0, 6)}…${address.slice(-4)}`;
+  let finished = false;
   const record = (row) => {
     rows.push(row);
-    renderDebugPanel(`${shortAddress} · running…`, rows);
+    renderDebugPanel(`${shortAddress} · ${finished ? "done" : "running…"}`, rows);
   };
+
+  // Main-thread long tasks (≥50ms) during the scan, to rule event-loop
+  // blocking in or out as a cause of slow stages. The Long Tasks API is
+  // Chromium-only; elsewhere the summary row says it's unsupported.
+  const longTasks = [];
+  let longTaskObserver = null;
+  if (DEBUG_TIMING) {
+    try {
+      if (PerformanceObserver.supportedEntryTypes?.includes("longtask")) {
+        longTaskObserver = new PerformanceObserver((list) => {
+          for (const e of list.getEntries()) if (e.startTime >= t0) longTasks.push(e);
+        });
+        longTaskObserver.observe({ type: "longtask" });
+      }
+    } catch {
+      longTaskObserver = null;
+    }
+  }
   renderDebugPanel(`${shortAddress} · running…`, rows);
   return {
     // Times one awaited step, recording when it started and finished
@@ -252,6 +286,18 @@ function createScanTimer(address) {
     },
     report() {
       if (!DEBUG_TIMING) return;
+      finished = true;
+      const totalBlocked = Math.round(longTasks.reduce((sum, e) => sum + e.duration, 0));
+      rows.push({
+        stage: "Main thread long tasks (≥50ms) during scan",
+        start_ms: 0,
+        end_ms: ms(performance.now()),
+        duration_ms: longTaskObserver ? totalBlocked : "",
+        net_ms: "",
+        ttfb_ms: "",
+        status: longTaskObserver ? `${longTasks.length} task(s)` : "not supported by this browser",
+      });
+      longTaskObserver?.disconnect();
       renderDebugPanel(`${shortAddress} · done`, rows);
       if (rows.length === 0) return;
       console.info(`[Conge] scan timing for ${address} (ms since Scan was tapped)`);
@@ -808,7 +854,7 @@ async function checkNetworkStatus() {
   const blockscoutResult = await fetchBlockscoutStats();
   attempts.push(blockscoutResult.diagnostic);
 
-  const workerResult = await probeWorker();
+  const workerResult = await enqueueWorkerJob(() => probeWorker());
   attempts.push(workerResult.diagnostic);
 
   networkNameEl.textContent = CONFIG.chainName;
@@ -1637,6 +1683,97 @@ async function scanToken(rawAddress) {
     txPromise.then(noteSettled("tx"));
     proxyAdminPromise.then(noteSettled("proxyAdmin"));
 
+    // The three slower Blockscout checks are computed as soon as their own
+    // data arrives — defined here, before anything awaits /tokens or
+    // /holders, so none of them is gated on those (or on each other). The
+    // card shows their results once it renders (stage 2 below); "Check
+    // ready" in the debug timing is when each result was available.
+
+    // Verification: the first definitive answer wins — an explicit
+    // is_verified from either endpoint, or /smart-contracts answering at
+    // all (200 → verified unless its body says otherwise, 404 → not
+    // verified). Only if neither gives one is it unknown (null).
+    const verificationPromise = new Promise((resolve) => {
+      contractPromise.then((contractResult) => {
+        if (contractResult.ok) {
+          resolve(typeof contractResult.body.is_verified === "boolean" ? contractResult.body.is_verified : true);
+        } else if (isBenignNotFound(contractResult)) {
+          resolve(false);
+        }
+      });
+      addressPromise.then((addressResult) => {
+        if (addressResult.ok && typeof addressResult.body.is_verified === "boolean") {
+          resolve(addressResult.body.is_verified);
+        }
+      });
+      Promise.all([contractPromise, addressPromise]).then(() => resolve(null));
+    });
+
+    const verificationCheck = verificationPromise.then((isVerified) => {
+      if (isCurrentScan()) timer.mark("Check ready: contract verification");
+      return { isVerified, findings: [scoreVerification(isVerified)] };
+    });
+
+    const ageCheck = txPromise.then((txResult) => {
+      const createdAtIso = txResult?.ok ? (txResult.body.timestamp ?? null) : null;
+      if (isCurrentScan()) timer.mark("Check ready: token age");
+      return [scoreTokenAge(createdAtIso)];
+    });
+
+    const ownerPrivilegesCheck = Promise.all([contractPromise, proxyAdminPromise, verificationPromise]).then(
+      async ([contractResult, proxyAdminResult, isVerified]) => {
+        const abi = contractResult.ok && Array.isArray(contractResult.body.abi) ? contractResult.body.abi : null;
+        // Three-way like verification: trust an explicit answer from
+        // whichever endpoint actually answered — /addresses is only
+        // waited on if /smart-contracts couldn't say.
+        let isProxy;
+        if (contractResult.ok) {
+          isProxy = Boolean(contractResult.body.proxy_type);
+        } else {
+          const addressResult = await addressPromise;
+          isProxy = addressResult.ok ? Boolean(addressResult.body.proxy_type) : null;
+        }
+        const proxyAdmin = proxyAdminFrom(contractResult);
+        const proxyAdminIsContract =
+          proxyAdminResult?.ok && typeof proxyAdminResult.body.is_contract === "boolean"
+            ? proxyAdminResult.body.is_contract
+            : undefined;
+        if (isCurrentScan()) timer.mark("Check ready: owner privileges");
+        return scoreOwnerPrivileges({ isVerified, abi, isProxy, proxyAdmin, proxyAdminIsContract });
+      },
+    );
+
+    const blockscoutChecks = Promise.all([verificationCheck, ageCheck, ownerPrivilegesCheck]);
+    blockscoutChecks.then(() => {
+      if (isCurrentScan()) timer.mark("All Blockscout checks ready");
+    });
+
+    // The owner() read needs nothing but the address, so it starts now,
+    // concurrently with the Blockscout calls — not after the card renders.
+    // It's one of only two things that hit the Worker's eth_call route
+    // during a scan (the other is the sell simulation below, which runs
+    // after it with a CHUNK_DELAY_MS gap, never in parallel — see the
+    // CHUNK_DELAY_MS doc comment near the top of this file); both go
+    // through enqueueWorkerJob so they also never overlap the page-load
+    // Worker probe. Each is retried once as a whole (see
+    // withWholeCheckRateLimitRetry) if it comes back rate-limited even
+    // after the Worker's and callWorkerChunked's own retries; if it's
+    // still rate-limited after that, the honest "Unknown" outcome (with
+    // its real diagnostics) replaces its pending row — never a dead
+    // spinner, never a generic error flash.
+    const ownerOutcomePromise = enqueueWorkerJob(() =>
+      timer.time(
+        "Worker owner() check",
+        withWholeCheckRateLimitRetry(
+          () => fetchOwnerViaWorker(address),
+          (r) => r.owner === null && hasRateLimitedDiagnostic(r.diagnostics),
+        ),
+      ),
+    );
+    // Awaited below on the normal path; this only keeps an early exit
+    // (e.g. a wallet address) from leaving a rejection unhandled.
+    ownerOutcomePromise.catch(() => {});
+
     // --- Stage 1: /tokens + /holders. These usually answer well before
     // /addresses and /smart-contracts, and carry everything needed for a
     // useful first view: name/symbol, supply, holder concentration,
@@ -1740,8 +1877,8 @@ async function scanToken(rawAddress) {
     timer.mark("First partial render (token + holders shown)");
 
     // --- Stage 2: the slower Blockscout checks, each resolving its own
-    // pending row independently as soon as its own data arrives — never
-    // gated on each other, and never on the Worker checks below.
+    // pending row independently as soon as its own result is ready — never
+    // gated on each other, and never on the Worker checks.
 
     // Details-table cells that come from /addresses.
     addressPromise.then((addressResult) => {
@@ -1756,99 +1893,26 @@ async function scanToken(rawAddress) {
       }
     });
 
-    // Verification: the first definitive answer wins — an explicit
-    // is_verified from either endpoint, or /smart-contracts answering at
-    // all (200 → verified unless its body says otherwise, 404 → not
-    // verified). Only if neither gives one is it unknown (null).
-    const verificationPromise = new Promise((resolve) => {
-      contractPromise.then((contractResult) => {
-        if (contractResult.ok) {
-          resolve(typeof contractResult.body.is_verified === "boolean" ? contractResult.body.is_verified : true);
-        } else if (isBenignNotFound(contractResult)) {
-          resolve(false);
-        }
-      });
-      addressPromise.then((addressResult) => {
-        if (addressResult.ok && typeof addressResult.body.is_verified === "boolean") {
-          resolve(addressResult.body.is_verified);
-        }
-      });
-      Promise.all([contractPromise, addressPromise]).then(() => resolve(null));
+    // Each Blockscout check's pending row resolves as soon as its result
+    // is ready — immediately, if its data already arrived before the card
+    // rendered (those .then callbacks run before the browser next paints,
+    // so an already-answered check never flashes a "Checking…" row).
+    verificationCheck.then(({ isVerified, findings }) => {
+      if (!isCurrentScan()) return;
+      resultVerifiedEl.textContent = isVerified === null ? UNAVAILABLE : isVerified ? "Yes" : "No";
+      resolvePendingFinding("verification", findings, null);
+    });
+    ageCheck.then((findings) => {
+      if (isCurrentScan()) resolvePendingFinding("token-age", findings, null);
+    });
+    ownerPrivilegesCheck.then((findings) => {
+      if (isCurrentScan()) resolvePendingFinding("owner-privileges", findings, null);
     });
 
-    const verificationCheck = verificationPromise.then((isVerified) => {
-      const finding = scoreVerification(isVerified);
-      if (isCurrentScan()) {
-        resultVerifiedEl.textContent = isVerified === null ? UNAVAILABLE : isVerified ? "Yes" : "No";
-        resolvePendingFinding("verification", finding, null);
-        timer.mark("Check resolved: contract verification");
-      }
-      return [finding];
-    });
-
-    const ageCheck = txPromise.then((txResult) => {
-      const createdAtIso = txResult?.ok ? (txResult.body.timestamp ?? null) : null;
-      const finding = scoreTokenAge(createdAtIso);
-      if (isCurrentScan()) {
-        resolvePendingFinding("token-age", finding, null);
-        timer.mark("Check resolved: token age");
-      }
-      return [finding];
-    });
-
-    const ownerPrivilegesCheck = Promise.all([contractPromise, proxyAdminPromise, verificationPromise]).then(
-      async ([contractResult, proxyAdminResult, isVerified]) => {
-        const abi = contractResult.ok && Array.isArray(contractResult.body.abi) ? contractResult.body.abi : null;
-        // Three-way like verification: trust an explicit answer from
-        // whichever endpoint actually answered — /addresses is only
-        // waited on if /smart-contracts couldn't say.
-        let isProxy;
-        if (contractResult.ok) {
-          isProxy = Boolean(contractResult.body.proxy_type);
-        } else {
-          const addressResult = await addressPromise;
-          isProxy = addressResult.ok ? Boolean(addressResult.body.proxy_type) : null;
-        }
-        const proxyAdmin = proxyAdminFrom(contractResult);
-        const proxyAdminIsContract =
-          proxyAdminResult?.ok && typeof proxyAdminResult.body.is_contract === "boolean"
-            ? proxyAdminResult.body.is_contract
-            : undefined;
-        const findings = scoreOwnerPrivileges({ isVerified, abi, isProxy, proxyAdmin, proxyAdminIsContract });
-        if (isCurrentScan()) {
-          resolvePendingFinding("owner-privileges", findings, null);
-          timer.mark("Check resolved: owner privileges");
-        }
-        return findings;
-      },
-    );
-
-    const blockscoutChecks = Promise.all([verificationCheck, ageCheck, ownerPrivilegesCheck]);
-    blockscoutChecks.then(() => {
-      if (isCurrentScan()) timer.mark("All Blockscout checks resolved");
-    });
-
-    // The owner() read and the sell-simulation honeypot check (pool
-    // detection, then transfer simulations) are the only two things that
-    // hit the Worker's eth_call route during a scan. They're run here,
-    // sequentially with a gap between them (never in parallel with each
-    // other), specifically to avoid bursting the shared upstream RPC's
-    // tight rate limit — see the CHUNK_DELAY_MS doc comment near the top
-    // of this file. That wait is no longer a blank screen: both rows
-    // already show their own pending state above, from addPendingRows.
-    // Each check is also individually retried once as a whole (not just
-    // per-batch — see withWholeCheckRateLimitRetry) if it comes back
-    // rate-limited even after the Worker's and callWorkerChunked's own
-    // retries. If it's still rate-limited after that, the honest
-    // "Unknown" outcome (with its real diagnostics) is what replaces the
-    // pending row — never a dead spinner, never a generic error flash.
-    const ownerOutcome = await timer.time(
-      "Worker owner() check",
-      withWholeCheckRateLimitRetry(
-        () => fetchOwnerViaWorker(address),
-        (r) => r.owner === null && hasRateLimitedDiagnostic(r.diagnostics),
-      ),
-    );
+    // Owner (started above, concurrently with Blockscout), then — after the
+    // same CHUNK_DELAY_MS gap as always — the sell simulation, which also
+    // needs the holder list from stage 1.
+    const ownerOutcome = await ownerOutcomePromise;
     if (!isCurrentScan()) return;
     const { owner, diagnostics: ownerDiagnostics } = ownerOutcome;
     const ownerFinding = scoreOwnerStatus(owner, ownerDiagnostics);
@@ -1859,11 +1923,13 @@ async function scanToken(rawAddress) {
 
     await sleep(CHUNK_DELAY_MS);
 
-    const sellSimulation = await timer.time(
-      "Worker sell simulation",
-      withWholeCheckRateLimitRetry(
-        () => runSellSimulation(address, holders),
-        (r) => r.status === "unreachable" && hasRateLimitedDiagnostic(r.diagnostics),
+    const sellSimulation = await enqueueWorkerJob(() =>
+      timer.time(
+        "Worker sell simulation",
+        withWholeCheckRateLimitRetry(
+          () => runSellSimulation(address, holders),
+          (r) => r.status === "unreachable" && hasRateLimitedDiagnostic(r.diagnostics),
+        ),
       ),
     );
     if (!isCurrentScan()) return;
@@ -1873,7 +1939,7 @@ async function scanToken(rawAddress) {
     // The level can only be computed (and the gauge settled) once every
     // check that affects scoring has resolved — the slower Blockscout
     // checks as well as the two Worker checks — not before.
-    const [verificationFindings, ageFindings, ownerPrivilegeFindings] = await blockscoutChecks;
+    const [{ findings: verificationFindings }, ageFindings, ownerPrivilegeFindings] = await blockscoutChecks;
     if (!isCurrentScan()) return;
     const overallLevel = computeOverallLevel([
       ...earlyFindings,
