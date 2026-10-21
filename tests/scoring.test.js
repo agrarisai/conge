@@ -438,7 +438,7 @@ test("scoreOwnerStatus", () => {
 });
 
 test("scoreOwnerStatus: carries diagnostics through on the unknown branch for the UI's Technical details, never affecting severity", () => {
-  const diagnostics = [{ label: "Worker — eth_call owner()", url: "https://conge-rpc.agrarisai.workers.dev", kind: "network-or-cors", errorName: "TypeError", errorMessage: "Failed to fetch" }];
+  const diagnostics = [{ label: "Worker — eth_call owner()", url: "https://rpc.conge.site", kind: "network-or-cors", errorName: "TypeError", errorMessage: "Failed to fetch" }];
   const f = scoreOwnerStatus(null, diagnostics);
   assert.equal(f.known, false);
   assert.equal(f.severity, SEVERITY.INFO);
@@ -550,7 +550,7 @@ test("scoreSellSimulation: Worker down -> Unknown, never counted as a pass", () 
 
 test("scoreSellSimulation: Worker down carries the raw diagnostics through for the UI's Technical details", () => {
   const diagnostics = [
-    { label: "Worker — eth_call token0()/token1() (pool detection)", url: "https://conge-rpc.agrarisai.workers.dev", kind: "timeout", errorName: "AbortError", errorMessage: "The operation was aborted." },
+    { label: "Worker — eth_call token0()/token1() (pool detection)", url: "https://rpc.conge.site", kind: "timeout", errorName: "AbortError", errorMessage: "The operation was aborted." },
   ];
   const f = scoreSellSimulation({ status: "unreachable", diagnostics });
   assert.equal(f.known, false);
@@ -561,7 +561,7 @@ test("scoreSellSimulation: unreachable specifically because of rate limiting get
   const diagnostics = [
     {
       label: "Worker — eth_call transfer() simulation",
-      url: "https://conge-rpc.agrarisai.workers.dev",
+      url: "https://rpc.conge.site",
       kind: "upstream-rate-limited",
       errorName: "HTTPError",
       errorMessage: "Upstream is rate limited (HTTP 429) after 5 attempts",
@@ -580,7 +580,7 @@ test("scoreSellSimulation: unreachable specifically because of rate limiting get
 
 test("scoreSellSimulation: a non-rate-limited unreachable cause keeps the existing generic message, not the rate-limited one", () => {
   const diagnostics = [
-    { label: "Worker — eth_call owner()", url: "https://conge-rpc.agrarisai.workers.dev", kind: "network-or-cors", errorName: "TypeError", errorMessage: "Failed to fetch" },
+    { label: "Worker — eth_call owner()", url: "https://rpc.conge.site", kind: "network-or-cors", errorName: "TypeError", errorMessage: "Failed to fetch" },
   ];
   const f = scoreSellSimulation({ status: "unreachable", diagnostics });
   assert.equal(f.title, "Sell simulation unknown");

@@ -23,8 +23,9 @@ secrets, no KV/D1, and it never logs request bodies.
     through to the upstream untouched — it's not validated, since its
     shape is caller-defined.
   - Request bodies over 20 KB are rejected before they're parsed.
-  - Requests are restricted to the origin `https://agrarisai.github.io`,
-    with no wildcard. This is enforced **server-side**, not just through CORS
+  - Requests are restricted to the site's exact origins —
+    `https://agrarisai.github.io`, `https://conge.site` and
+    `https://www.conge.site` — with no wildcard. This is enforced **server-side**, not just through CORS
     headers. Any POST whose `Origin` isn't exactly that, including one with
     no `Origin` at all (curl's default), gets `403` before the body is read
     or anything reaches the upstream. The `OPTIONS` preflight is checked the
@@ -90,13 +91,16 @@ works too.
 
 ## Testing it yourself
 
-The allowed origin is `https://agrarisai.github.io`, so a plain `curl`
-without an `Origin` header will get `403` — that's correct, not a bug.
-Pass the header explicitly to test as the real site would:
+The allowed origins are `https://agrarisai.github.io`, `https://conge.site`
+and `https://www.conge.site`, so a plain `curl` without an `Origin` header
+will get `403` — that's correct, not a bug. Pass the header explicitly to
+test as the real site would (this project's Worker is at
+`https://rpc.conge.site`; a fresh deploy of your own starts on
+`conge-rpc.<your-subdomain>.workers.dev`):
 
 ```bash
-curl -i -X POST https://conge-rpc.<your-subdomain>.workers.dev/ \
-  -H "Origin: https://agrarisai.github.io" \
+curl -i -X POST https://rpc.conge.site/ \
+  -H "Origin: https://conge.site" \
   -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
 ```
@@ -108,14 +112,15 @@ A batch works the same way, as a JSON array of up to 10 request objects.
 The upstream RPC is a shared, rate-limited resource, so the Worker and the
 site protect it in layers:
 
-- **Server-side origin check (in code).** Only `https://agrarisai.github.io`
-  is accepted. Any other `Origin`, or none, gets `403` before any upstream
+- **Server-side origin check (in code).** Only the site's origins
+  (`https://agrarisai.github.io`, `https://conge.site`,
+  `https://www.conge.site`) are accepted. Any other `Origin`, or none, gets `403` before any upstream
   work. `worker/tests/worker.test.js` covers forged origins on the actual
   POST: no Origin, `null`, look-alike domains, the wrong scheme, a trailing
   slash or path, a port, different letter case, and browser-like headers
   around a foreign Origin.
 - **What the origin check can't do.** A script can send the *exact*
-  allowed header, `Origin: https://agrarisai.github.io`. No origin check
+  allowed header, e.g. `Origin: https://conge.site`. No origin check
   can tell that apart from the real site, so a per-IP rate limit (below)
   is the backstop for scripted abuse.
 - **`/health` is shared (in code).** One upstream check serves every
@@ -137,6 +142,12 @@ site protect it in layers:
 WAF rules, including rate limiting rules, attach to a *zone* (your own
 domain). They can't be added to a `*.workers.dev` URL, because Cloudflare
 owns that zone.
+
+> **Status for this project:** steps 1–3 are done. The Worker is on
+> `https://rpc.conge.site`, and `WORKER_URL` in `app.js` points there. Step
+> 4 is **still open**: the old `conge-rpc.agrarisai.workers.dev` address
+> still works, so a rate limiting rule on `conge.site` can be bypassed
+> through it until that route is disabled.
 
 1. Add your domain to Cloudflare, if it isn't already. The Free plan is
    enough.

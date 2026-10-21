@@ -9,7 +9,7 @@ The first supported chain is **Robinhood Chain mainnet**:
 - Chain ID: `4663`
 - Blockscout API (primary data source): `https://robinhoodchain.blockscout.com/api/v2`
 - Explorer: `https://robinhoodchain.blockscout.com`
-- RPC (optional secondary source, via the Worker proxy): `https://conge-rpc.agrarisai.workers.dev`
+- RPC (optional secondary source, via the Worker proxy): `https://rpc.conge.site`
 
 **The Blockscout API v2 is the primary data source.** RPC reads are only
 an optional secondary source — the site works fully with them removed or
@@ -19,7 +19,7 @@ when reachable. **The site never calls `rpc.mainnet.chain.robinhood.com`
 directly** — that endpoint has been reported unreachable from some mobile
 devices (a TLS certificate error). Instead, every RPC call from the
 browser goes through the [Worker](#worker) proxy at
-`WORKER_URL` (`https://conge-rpc.agrarisai.workers.dev`), which forwards
+`WORKER_URL` (`https://rpc.conge.site`), which forwards
 read-only calls to the upstream RPC from Cloudflare's edge and adds CORS
 headers for this site's origin.
 
@@ -790,13 +790,13 @@ origin. That's usually enough to tell what's wrong:
   reported unreachable from some mobile devices (a TLS certificate error),
   while the Worker sits in front of it on Cloudflare's own edge and
   explicitly adds CORS headers for this site's origin. To narrow down a
-  Worker failure, open `https://conge-rpc.agrarisai.workers.dev/health`
+  Worker failure, open `https://rpc.conge.site/health`
   directly in a browser tab (it's not origin-restricted, see
   [Worker](#worker) below) — if that also fails, the Worker itself or its
   upstream RPC is down, not a CORS issue.
 - **An HTTP status (403, 429, 5xx, …)** — the request reached the server,
   which rejected or failed it. 403 from the Worker specifically means the
-  request's `Origin` isn't `https://agrarisai.github.io` (by design); 429
+  request's `Origin` isn't one of the site's allowed origins (by design); 429
   means rate-limiting; 5xx/502 means the Worker or its upstream is having
   problems.
 - **A JSON-RPC error** (Worker RPC secondary only) — the request and
@@ -810,15 +810,15 @@ origin with `curl`. For the Blockscout API (primary):
 
 ```bash
 curl -i "https://robinhoodchain.blockscout.com/api/v2/stats" \
-  -H "Origin: https://agrarisai.github.io"
+  -H "Origin: https://conge.site"
 ```
 
 For the Worker (RPC secondary):
 
 ```bash
-curl -i -X POST https://conge-rpc.agrarisai.workers.dev \
+curl -i -X POST https://rpc.conge.site \
   -H "Content-Type: application/json" \
-  -H "Origin: https://agrarisai.github.io" \
+  -H "Origin: https://conge.site" \
   --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
 ```
 
@@ -832,7 +832,7 @@ Fetch API only ever reports a generic `Failed to fetch` for this case.
 > initiated by a page's own JavaScript is. So confirming
 > `https://robinhoodchain.blockscout.com/api/v2/stats` loads and shows
 > JSON when opened directly in a mobile browser (as was done for this PR)
-> does **not** by itself prove `fetch()` calls from `agrarisai.github.io`
+> does **not** by itself prove `fetch()` calls from the site's own origin
 > will succeed — only the `curl -H "Origin: ..."` check above (or the
 > live site's own **Technical details** panel, if it still fails) proves
 > that.
@@ -925,8 +925,9 @@ above for why that endpoint can fail from some networks). It:
   field is validated and forwarded untouched, which the owner check and
   the sell-simulation honeypot check both rely on;
 - validates addresses/call data as hex before forwarding;
-- only accepts requests from `https://agrarisai.github.io` (no wildcard
-  CORS);
+- only accepts requests from the site's own origins —
+  `https://agrarisai.github.io`, `https://conge.site` and
+  `https://www.conge.site` — enforced server-side, with no wildcard CORS;
 - **retries a rate-limited or overloaded upstream call** (HTTP `429`/`503`
   from `rpc.mainnet.chain.robinhood.com` — the RPC has a tight shared
   rate limit, and a full scan's burst of sequential calls can trip it) up
@@ -947,7 +948,7 @@ validation/CORS logic has its own unit tests, runnable with
 `node --test worker/tests/worker.test.js`.
 
 **The Worker is deployed and wired into `app.js`** as the `WORKER_URL`
-constant (`https://conge-rpc.agrarisai.workers.dev`, next to `CONFIG` —
+constant (`https://rpc.conge.site`, the Worker's custom domain, next to `CONFIG` —
 see [Tech](#tech) above). Every RPC call the site makes — the network
 status chain-ID cross-check, the owner check, and the sell-simulation
 honeypot check — goes through it; there is no direct-to-upstream code
@@ -959,7 +960,7 @@ different Cloudflare account/subdomain), update `WORKER_URL` to match.
 `GET /health` opened directly in a browser tab is a **top-level
 navigation, not subject to CORS** — it only proves the Worker itself is up
 and can reach its upstream RPC. It does **not** prove that a cross-origin
-`fetch()` POST from `https://agrarisai.github.io` (what the site actually
+`fetch()` POST from the site's origin (what the site actually
 does) succeeds, since CORS is a browser-side restriction that only applies
 to that kind of request. If Network status, the owner check, or the
 sell-simulation check report the Worker/RPC as unreachable while `/health`
@@ -989,7 +990,9 @@ works fine in a browser tab, use these in order:
      [Troubleshooting network connectivity](#troubleshooting-network-connectivity)
      above).
    - `origin-rejected` — the request reached the Worker, which returned
-     `403` because the `Origin` header wasn't `https://agrarisai.github.io`.
+     `403` because the `Origin` header wasn't one of the site's allowed
+     origins (`https://agrarisai.github.io`, `https://conge.site`,
+     `https://www.conge.site`).
    - `validation-rejected` — the request reached the Worker, which
      rejected it as malformed or oversized (`400`/`413`) — a bug in the
      request, not a CORS problem.

@@ -25,15 +25,15 @@ import worker, {
 } from "../index.js";
 
 const SITE_ORIGIN = "https://agrarisai.github.io";
-const WORKER_URL = "https://conge-rpc.agrarisai.workers.dev/";
+const WORKER_URL = "https://rpc.conge.site/";
 
 const VALID_ADDRESS = "0x1234567890123456789012345678901234567890";
 const OTHER_ADDRESS = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
 
 // --- Config sanity -----------------------------------------------------
 
-test("ALLOWED_ORIGINS is exactly the site, no wildcard", () => {
-  assert.deepEqual(ALLOWED_ORIGINS, ["https://agrarisai.github.io"]);
+test("ALLOWED_ORIGINS is exactly the site's origins, no wildcard", () => {
+  assert.deepEqual(ALLOWED_ORIGINS, ["https://agrarisai.github.io", "https://conge.site", "https://www.conge.site"]);
 });
 
 test("ALLOWED_METHODS is exactly the four read-only methods", () => {
@@ -46,6 +46,12 @@ test("isAllowedOrigin: only the configured origin passes", () => {
   assert.equal(isAllowedOrigin("https://agrarisai.github.io"), true);
   assert.equal(isAllowedOrigin("https://evil.example"), false);
   assert.equal(isAllowedOrigin("http://agrarisai.github.io"), false); // wrong scheme
+  assert.equal(isAllowedOrigin("https://conge.site"), true);
+  assert.equal(isAllowedOrigin("https://www.conge.site"), true);
+  assert.equal(isAllowedOrigin("http://conge.site"), false); // wrong scheme
+  assert.equal(isAllowedOrigin("https://rpc.conge.site"), false); // the Worker's own host isn't the site
+  assert.equal(isAllowedOrigin("https://evil.conge.site"), false); // no subdomain wildcard
+  assert.equal(isAllowedOrigin("https://conge.site.evil.example"), false);
   assert.equal(isAllowedOrigin(null), false);
   assert.equal(isAllowedOrigin(undefined), false);
   assert.equal(isAllowedOrigin(""), false);
@@ -376,6 +382,55 @@ test("full request handler: a real POST from a disallowed origin is rejected wit
   assert.equal(upstreamWasCalled, false);
 });
 
+// --- Every allowed origin works end to end -------------------------------
+//
+// The site is moving from GitHub Pages to its own domain, so a real browser
+// POST — and its preflight — from each allowed origin (old and new, with
+// and without www) must be accepted and echoed back as its own
+// Access-Control-Allow-Origin, never a different one and never "*".
+
+for (const allowedOrigin of ALLOWED_ORIGINS) {
+  test(`allowed origin works end to end (preflight + POST): ${allowedOrigin}`, async (t) => {
+    const originalFetch = globalThis.fetch;
+    let upstreamCalls = 0;
+    globalThis.fetch = async () => {
+      upstreamCalls++;
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x1237" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    t.after(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    const preflight = await worker.fetch(
+      new Request(WORKER_URL, {
+        method: "OPTIONS",
+        headers: {
+          Origin: allowedOrigin,
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "content-type",
+        },
+      }),
+    );
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get("access-control-allow-origin"), allowedOrigin);
+
+    const response = await worker.fetch(
+      new Request(WORKER_URL, {
+        method: "POST",
+        headers: { Origin: allowedOrigin, "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+      }),
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("access-control-allow-origin"), allowedOrigin);
+    assert.deepEqual(await response.json(), { jsonrpc: "2.0", id: 1, result: "0x1237" });
+    assert.equal(upstreamCalls, 1);
+  });
+}
+
 // --- Forged origins on the actual POST (not just the preflight) -----------
 //
 // CORS headers only stop a *browser* from reading a cross-origin response;
@@ -397,6 +452,11 @@ const FORGED_ORIGINS = [
   ["the right origin with a port", "https://agrarisai.github.io:443"],
   ["different letter case", "https://AgrarisAI.github.io"],
   ["a localhost dev origin", "http://localhost:8080"],
+  ["the custom domain over http", "http://conge.site"],
+  ["an unlisted subdomain of the custom domain", "https://evil.conge.site"],
+  ["the Worker's own custom domain", "https://rpc.conge.site"],
+  ["a look-alike of the custom domain", "https://conge.site.evil.example"],
+  ["the custom domain with a trailing slash", "https://conge.site/"],
 ];
 
 for (const [label, forgedOrigin] of FORGED_ORIGINS) {

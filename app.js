@@ -27,15 +27,17 @@ import {
 } from "./scoring.js";
 
 // Cloudflare Worker RPC proxy (see worker/) — a thin, read-only JSON-RPC
-// proxy for rpc.mainnet.chain.robinhood.com, deployed and confirmed
-// healthy at this URL. ALL RPC calls from this site go through it; the
+// proxy for rpc.mainnet.chain.robinhood.com, served on the project's own
+// custom domain. (The same Worker is also still reachable at its original
+// conge-rpc.*.workers.dev address for now, but the site no longer uses
+// it.) ALL RPC calls from this site go through it; the
 // raw upstream RPC is never called directly from the browser, since it's
 // been reported unreachable from some networks (see "Troubleshooting
 // network connectivity" in README.md). Blockscout remains the primary
 // data source — the Worker is only ever an optional secondary source
 // (chain-ID cross-check, owner(), the sell-simulation honeypot check
 // below); the site works fully with it unreachable too.
-const WORKER_URL = "https://conge-rpc.agrarisai.workers.dev";
+const WORKER_URL = "https://rpc.conge.site";
 
 // Single source of truth for chain/explorer configuration. The Blockscout
 // API v2 (explorerApiUrl) is the PRIMARY data source for this site — it's
