@@ -226,42 +226,59 @@ summary:focus-visible {
 }
 
 /* --- Nav toggle / close buttons -----------------------------------------
-   Square icon buttons of matching visual weight: .nav-toggle sits on the
-   right of the header, next to the logo/wordmark, and opens the panel
-   below; .nav-close is its counterpart inside the panel's own header
-   row. Both share the same bar-built icon markup (.nav-toggle-icon) so
-   the hamburger, its open (×) state, and the panel's static × are all
-   drawn with the same two CSS bars rather than three different icons. */
+   Plain square icon buttons in the style of Cloudflare's dashboard menu
+   button: transparent, a subtle hairline border, and three equal,
+   evenly spaced ink bars — no fill of their own, so they sit quietly in
+   the header. .nav-toggle leads the header row on the left, before the
+   logo/wordmark, and opens the panel; .nav-close is its counterpart
+   inside the panel's own header row. Both share the same bar-built icon
+   markup (.nav-toggle-icon), so the hamburger, its open (×) state, and
+   the panel's static × are all drawn with the same CSS bars rather than
+   three different icons. */
 
 .nav-toggle,
 .nav-close {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 2.25rem;
   height: 2.25rem;
   padding: 0;
-  background-color: var(--color-surface);
+  background-color: transparent;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+/* Invisible 44×44px hit area around the 36px visual square, so the
+   button is comfortable to tap without looking any bigger. (Offsets are
+   measured from the 34px padding box inside the 1px border: 34 + 2×5 = 44.) */
+.nav-toggle::after,
+.nav-close::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
 }
 
 .nav-toggle {
   flex-shrink: 0;
-  margin-left: auto;
 }
 
 .nav-toggle:hover,
 .nav-close:hover {
+  background-color: var(--tone-neutral-bg);
   border-color: var(--color-border-strong);
 }
 
+/* Three equal bars, 16px wide and 2px thick, 5px apart centre to centre
+   (3px of space between them). */
 .nav-toggle-icon,
 .nav-toggle-icon::before,
 .nav-toggle-icon::after {
   display: block;
-  width: 1.1rem;
+  width: 1rem;
   height: 2px;
   border-radius: 1px;
   background-color: var(--color-ink);
@@ -280,11 +297,11 @@ summary:focus-visible {
 }
 
 .nav-toggle-icon::before {
-  top: -6px;
+  top: -5px;
 }
 
 .nav-toggle-icon::after {
-  top: 6px;
+  top: 5px;
 }
 
 .nav-toggle[aria-expanded="true"] .nav-toggle-icon,
