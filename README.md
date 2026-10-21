@@ -623,7 +623,9 @@ robots.txt           # allows all crawling, points to sitemap.xml — see "SEO" 
 sitemap.xml           # all five pages' absolute URLs — see "SEO" below
 assets/              # brand imagery — see "Branding assets" below
 worker/              # Cloudflare Worker RPC proxy — see "Worker" below
-  index.js             # the Worker itself (single file, no dependencies)
+  index.js             # the Worker itself (single file, no runtime dependencies)
+  wrangler.toml        # deploy config for Workers Builds (Git-connected auto-deploy)
+  package.json         # wrangler as a devDependency + "deploy"/"test" scripts (with package-lock.json)
   README.md            # deploy steps, /health, rate limiting
   tests/worker.test.js # unit tests for its validation/CORS logic (node --test)
 ```
@@ -1028,13 +1030,14 @@ scenario these tests (and manual code review) could construct.
 Since the code checks out but the live symptom is real, the most likely
 explanations are outside this file:
 - **The live deployment may not exactly match this repository's
-  `worker/index.js`** (a dashboard paste can silently diverge from the
-  repo over time). As a precaution, re-copy the current
-  `worker/index.js` into the Cloudflare dashboard and redeploy — see
-  [`worker/README.md`](./worker/README.md) for the exact steps (Workers &
-  Pages → your Worker → Edit code → paste → Save and deploy). This is
-  harmless either way: if the live code already matched, redeploying
-  changes nothing.
+  `worker/index.js`.** The Worker deploys from `main` via Cloudflare Workers
+  Builds, but a manual dashboard edit, or a merge whose build failed, can
+  leave it out of sync. Check the Worker's **Deployments** tab in the
+  Cloudflare dashboard for the latest build. As a precaution, use **Retry
+  build** there to redeploy `main` — see
+  [`worker/README.md`](./worker/README.md) → "Deploying". This is harmless
+  either way: if the live code already matched, redeploying changes
+  nothing.
 - **A Cloudflare zone-level security feature** (e.g. Bot Fight Mode,
   Browser Integrity Check) could in principle block a `fetch()`-originated
   request while allowing a real top-level navigation like opening

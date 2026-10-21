@@ -1,0 +1,20 @@
+# Cloudflare Worker config for the Conge read-only RPC relay.
+# Deployed automatically by Workers Builds (Git integration) on every
+# merge to main — see README.md → "Deploying".
+#
+# Routes and the custom domain (rpc.conge.site) are deliberately NOT
+# configured here: they're managed in the Cloudflare dashboard, and with
+# no `routes` in this file `wrangler deploy` leaves them untouched.
+
+name = "conge-rpc"
+main = "index.js"
+compatibility_date = "2026-10-01"
+
+# The conge-rpc.<subdomain>.workers.dev address. Unlike routes, this IS
+# applied on every deploy: with no routes in this file, wrangler would
+# default it to true anyway, re-enabling the address each time. It's
+# explicit here so it's a visible switch: set it to false (and merge) to
+# turn the workers.dev address off for good — see README.md → "Abuse
+# protection and rate limiting". Disabling it only in the dashboard would
+# be undone by the next deploy.
+workers_dev = true

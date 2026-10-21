@@ -1,0 +1,14 @@
+{
+  "name": "conge-rpc",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Read-only JSON-RPC relay (Cloudflare Worker) for Conge",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "test": "node --test tests/worker.test.js"
+  },
+  "devDependencies": {
+    "wrangler": "^4.151.3"
+  }
+}
