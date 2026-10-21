@@ -897,3 +897,114 @@ test("scoreToken: an Agraris-like fixture (unverified, 100% one holder, 2 holder
   assert.match(byId["holder-top1"].title, /100%/);
   assert.equal(byId["holder-count"].severity, SEVERITY.HIGH);
 });
+
+// --- Blockscout timeouts / failures degrade to honest "unknown" ------------
+// Blockscout endpoints (notably /addresses and /smart-contracts) can be slow
+// or time out under load — an accepted external limitation, like the RPC
+// rate limit. A check whose data source failed must say so and carry the
+// failed request's diagnostics (same pattern as scoreOwnerStatus), without
+// ever changing severity or counting toward the level.
+
+const ADDRESSES_TIMEOUT = {
+  label: "Blockscout API v2 — GET /addresses/{address}",
+  url: "https://robinhoodchain.blockscout.com/api/v2/addresses/0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+  kind: "timeout",
+  errorName: "AbortError",
+  errorMessage: "signal is aborted without reason",
+  ok: false,
+};
+const SMART_CONTRACTS_TIMEOUT = {
+  ...ADDRESSES_TIMEOUT,
+  label: "Blockscout API v2 — GET /smart-contracts/{address}",
+  url: "https://robinhoodchain.blockscout.com/api/v2/smart-contracts/0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+};
+
+test("scoreVerification: a failed lookup is Unknown with the failure named and diagnostics carried", () => {
+  const f = scoreVerification(null, [ADDRESSES_TIMEOUT, SMART_CONTRACTS_TIMEOUT]);
+  assert.equal(f.known, false);
+  assert.equal(f.severity, SEVERITY.INFO);
+  assert.match(f.title, /unknown/i);
+  assert.match(f.detail, /block explorer didn't answer/i);
+  assert.equal(f.diagnostics.length, 2);
+  // Without diagnostics the existing wording stays, and nothing is attached.
+  assert.equal(scoreVerification(null).diagnostics, null);
+  assert.doesNotMatch(scoreVerification(null).detail, /block explorer/i);
+  // A known answer never carries diagnostics.
+  assert.equal(scoreVerification(true, [ADDRESSES_TIMEOUT]).diagnostics, null);
+});
+
+test("scoreTokenAge: a failed /addresses or /transactions lookup is Unknown with the failure named", () => {
+  const f = scoreTokenAge(null, new Date(), THRESHOLDS, [ADDRESSES_TIMEOUT]);
+  assert.equal(f.known, false);
+  assert.equal(f.severity, SEVERITY.INFO);
+  assert.equal(f.title, "Token age unknown");
+  assert.match(f.detail, /block explorer didn't answer/i);
+  assert.deepEqual(f.diagnostics, [ADDRESSES_TIMEOUT]);
+  assert.equal(scoreTokenAge(null).diagnostics, null);
+});
+
+test("scoreOwnerPrivileges: a failed /smart-contracts lookup blames the lookup, not the contract", () => {
+  // Verified per /addresses, but /smart-contracts (the ABI) timed out.
+  const findings = scoreOwnerPrivileges({
+    isVerified: true,
+    abi: null,
+    isProxy: false,
+    abiDiagnostics: [SMART_CONTRACTS_TIMEOUT],
+  });
+  const abiUnknown = findings.find((f) => f.id === "owner-privileges-abi");
+  assert.equal(abiUnknown.known, false);
+  assert.equal(abiUnknown.severity, SEVERITY.INFO);
+  assert.match(abiUnknown.detail, /couldn't be read from the block explorer/i);
+  assert.doesNotMatch(abiUnknown.detail, /not available for this contract/i);
+  assert.deepEqual(abiUnknown.diagnostics, [SMART_CONTRACTS_TIMEOUT]);
+});
+
+test("scoreOwnerPrivileges: a contract known to be unverified keeps the unverified wording even if the lookup also failed", () => {
+  const findings = scoreOwnerPrivileges({
+    isVerified: false,
+    abi: null,
+    isProxy: false,
+    abiDiagnostics: [SMART_CONTRACTS_TIMEOUT],
+  });
+  const abiUnknown = findings.find((f) => f.id === "owner-privileges-abi");
+  assert.match(abiUnknown.detail, /not available for this contract/i);
+  assert.equal(abiUnknown.diagnostics, null);
+});
+
+test("scoreToken: /addresses timeout fixture — verification falls back to /smart-contracts, age is an honest Unknown, level unaffected", () => {
+  // USDG-shaped token where /addresses timed out: verification comes from
+  // /smart-contracts (200, verified), proxy type from /smart-contracts too,
+  // but the creation time (which needs /addresses → /transactions) is missing.
+  const now = new Date("2026-10-21T00:00:00Z");
+  const holders = [
+    { address: "0x1111111111111111111111111111111111111111", valueRaw: "126" },
+    { address: "0x2222222222222222222222222222222222222222", valueRaw: "874" },
+  ];
+  const base = {
+    isVerified: true,
+    abi: [],
+    isProxy: true,
+    holders,
+    totalSupplyRaw: "1000",
+    holdersCount: 365893,
+    owner: null,
+    marketData: {},
+    now,
+  };
+  const timedOut = scoreToken({ ...base, createdAtIso: null, ageDiagnostics: [ADDRESSES_TIMEOUT] });
+  const byId = Object.fromEntries(timedOut.findings.map((f) => [f.id, f]));
+
+  assert.equal(byId["verification"].title, "Source code verified");
+  assert.equal(byId["token-age"].known, false);
+  assert.equal(byId["token-age"].title, "Token age unknown");
+  assert.match(byId["token-age"].detail, /block explorer didn't answer/i);
+  assert.deepEqual(byId["token-age"].diagnostics, [ADDRESSES_TIMEOUT]);
+  // Nothing in the result is a blank/broken finding.
+  for (const f of timedOut.findings) {
+    assert.ok(f.title && f.detail, `finding ${f.id} has a title and detail`);
+  }
+  // The timeout is never a red flag on its own: an Unknown age doesn't
+  // count, so the level matches the same facts with no age at all.
+  const noAge = scoreToken({ ...base, createdAtIso: null });
+  assert.equal(timedOut.overallLevel, noAge.overallLevel);
+});

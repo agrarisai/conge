@@ -255,14 +255,22 @@ function formatAgePhrase(ageHours) {
 
 // --- Check 1: source verification ---------------------------------------
 
-export function scoreVerification(isVerified) {
+// `diagnostics` (optional, like scoreOwnerStatus's): the block-explorer
+// request(s) that failed or timed out, when that's *why* verification is
+// unknown. Only changes the wording and carries them through for the UI's
+// Technical details — never the severity.
+export function scoreVerification(isVerified, diagnostics = null) {
   if (isVerified === null || isVerified === undefined) {
+    const failed = Boolean(diagnostics?.length);
     return finding({
       id: "verification",
       known: false,
       severity: SEVERITY.INFO,
       title: "Verification status unknown",
-      detail: "Could not determine whether the contract's source code is verified.",
+      detail: failed
+        ? "The block explorer didn't answer in time (or returned an error), so it couldn't be checked whether the contract's source code is verified."
+        : "Could not determine whether the contract's source code is verified.",
+      diagnostics: failed ? diagnostics : null,
     });
   }
   if (isVerified === false) {
@@ -457,14 +465,21 @@ export function scoreHolderCount(holdersCount, thresholds = THRESHOLDS) {
 
 // --- Check 4: token age ----------------------------------------------------
 
-export function scoreTokenAge(createdAtIso, now = new Date(), thresholds = THRESHOLDS) {
+// `diagnostics` (optional): the block-explorer request(s) — /addresses or
+// the creation /transactions lookup — that failed or timed out, when that's
+// why the creation time is missing. Wording + Technical details only.
+export function scoreTokenAge(createdAtIso, now = new Date(), thresholds = THRESHOLDS, diagnostics = null) {
   if (!createdAtIso) {
+    const failed = Boolean(diagnostics?.length);
     return finding({
       id: "token-age",
       known: false,
       severity: SEVERITY.INFO,
       title: "Token age unknown",
-      detail: "The contract creation time could not be determined.",
+      detail: failed
+        ? "The block explorer didn't answer in time (or returned an error), so the contract's creation time couldn't be read."
+        : "The contract creation time could not be determined.",
+      diagnostics: failed ? diagnostics : null,
     });
   }
   const createdAt = new Date(createdAtIso);
@@ -599,7 +614,10 @@ export function detectAbiPrivileges(abi) {
 }
 
 export function scoreOwnerPrivileges(facts, thresholds = THRESHOLDS) {
-  const { isVerified, abi, isProxy, proxyAdmin, proxyAdminIsContract } = facts;
+  // abiDiagnostics (optional): the /smart-contracts request that failed or
+  // timed out, when that's why the ABI is missing — so the "unknown"
+  // finding blames the failed lookup, not the contract.
+  const { isVerified, abi, isProxy, proxyAdmin, proxyAdminIsContract, abiDiagnostics = null } = facts;
   const hasVerifiedAbi = isVerified === true && Array.isArray(abi);
   const effectiveIsProxy = isProxy === true || (hasVerifiedAbi && abiLooksLikeProxy(abi));
 
@@ -620,14 +638,19 @@ export function scoreOwnerPrivileges(facts, thresholds = THRESHOLDS) {
       );
     }
   } else {
+    // A contract known to be unverified really has no readable ABI; only
+    // otherwise is a failed lookup the honest reason.
+    const lookupFailed = isVerified !== false && Boolean(abiDiagnostics?.length);
     findings.push(
       finding({
         id: "owner-privileges-abi",
         known: false,
         severity: SEVERITY.INFO,
         title: "Owner privileges unknown",
-        detail:
-          "Detecting mint, pause, blacklist, fee-changing, and max-transaction functions requires verified source code with a readable ABI, which is not available for this contract.",
+        detail: lookupFailed
+          ? "The contract's ABI couldn't be read from the block explorer (the request failed or timed out), so mint, pause, blacklist, fee-changing, and max-transaction functions could not be checked."
+          : "Detecting mint, pause, blacklist, fee-changing, and max-transaction functions requires verified source code with a readable ABI, which is not available for this contract.",
+        diagnostics: lookupFailed ? abiDiagnostics : null,
       }),
     );
   }
@@ -805,10 +828,10 @@ export function computeOverallLevel(findings, thresholds = THRESHOLDS) {
 // data (no promises, no network calls).
 export function scoreToken(facts, thresholds = THRESHOLDS) {
   const findings = [
-    scoreVerification(facts.isVerified),
+    scoreVerification(facts.isVerified, facts.verificationDiagnostics),
     ...scoreHolderConcentration(facts.holders, facts.totalSupplyRaw, thresholds),
     scoreHolderCount(facts.holdersCount, thresholds),
-    scoreTokenAge(facts.createdAtIso, facts.now ?? new Date(), thresholds),
+    scoreTokenAge(facts.createdAtIso, facts.now ?? new Date(), thresholds, facts.ageDiagnostics),
     ...scoreOwnerPrivileges(
       {
         isVerified: facts.isVerified,
@@ -816,6 +839,7 @@ export function scoreToken(facts, thresholds = THRESHOLDS) {
         isProxy: facts.isProxy,
         proxyAdmin: facts.proxyAdmin,
         proxyAdminIsContract: facts.proxyAdminIsContract,
+        abiDiagnostics: facts.abiDiagnostics,
       },
       thresholds,
     ),
