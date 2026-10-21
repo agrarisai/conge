@@ -620,6 +620,8 @@ app.js               # app logic for index.html only (ES module, imports viem ut
 scoring.js           # Risk Score v1 — pure, rule-based scoring + ABI helpers
 tests/scoring.test.js  # unit tests for scoring.js (node --test)
 scripts/contrast-audit.mjs  # WCAG contrast check of every real text/background pairing, read from style.css (node scripts/contrast-audit.mjs)
+scripts/version-assets.mjs  # cache-busting: stamps ?v=<content hash> on style.css/JS references (run after editing them)
+tests/asset-versions.test.js  # fails if any ?v= is stale (node --test tests/asset-versions.test.js)
 robots.txt           # allows all crawling, points to sitemap.xml — see "SEO" below
 sitemap.xml           # all five pages' absolute URLs — see "SEO" below
 assets/              # brand imagery — see "Branding assets" below
@@ -673,6 +675,28 @@ This repo is currently deployed at `https://agrarisai.github.io/conge/`,
 which is hardcoded into the absolute URLs in `index.html`'s Open Graph /
 Twitter card tags (see [Branding assets](#branding-assets)). If you fork
 or rename this repo, update those URLs to match the new address.
+
+
+### Cache-busting CSS and JS
+
+Every page loads its own CSS and JS with a content-hash query string, e.g.
+`style.css?v=81f3af2890` (and `app.js` imports `./scoring.js?v=…`). GitHub
+Pages and browsers cache these files, so without a version a visitor could
+get freshly deployed HTML together with an older, cached `style.css`. That
+is exactly how the desktop header links once showed up on phones as raw,
+blue, underlined links: the HTML had the new inline nav, but the cached
+stylesheet didn't yet have the rule that hides it.
+
+After editing `style.css`, `nav.js`, `scroll-fx.js`, `faq.js`, `app.js` or
+`scoring.js`, run:
+
+```bash
+node scripts/version-assets.mjs
+```
+
+It recomputes each file's hash and updates every reference. `node --test
+tests/asset-versions.test.js` (or `node scripts/version-assets.mjs --check`)
+fails if a version is out of date.
 
 ## Branding assets
 

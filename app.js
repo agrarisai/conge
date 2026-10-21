@@ -24,7 +24,7 @@ import {
   THRESHOLDS,
   lacksTokenMetadata,
   classifyScanTarget,
-} from "./scoring.js";
+} from "./scoring.js?v=0d36ac69d9";
 
 // Cloudflare Worker RPC proxy (see worker/) — a thin, read-only JSON-RPC
 // proxy for rpc.mainnet.chain.robinhood.com, served on the project's own
