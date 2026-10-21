@@ -698,6 +698,24 @@ this codebase):
 To replace any of these, just overwrite the file in `assets/` — no code
 changes needed as long as the filename stays the same.
 
+## Measuring scan speed
+
+Add `?debug=timing` to the page URL (or run
+`localStorage.setItem("conge:debug-timing", "1")` in the console to keep
+it on) and every scan prints a `console.table` of its stages. Times are in
+ms since Scan was tapped: each Blockscout call, **First render** (all
+Blockscout data shown), the Worker owner and sell-simulation checks, and
+**Final verdict shown**. Nothing is logged without the flag.
+
+All Blockscout calls start as early as their own inputs allow. The four
+primary lookups (`/addresses`, `/tokens`, `/smart-contracts`,
+`/tokens/{address}/holders`) start together. The creation-tx lookup (token
+age) waits only for `/addresses`, and the proxy-admin lookup waits only for
+`/smart-contracts`. First render therefore costs the slowest dependency
+chain, not the sum. None of the Worker rate-limit spacing or retries
+(`CHUNK_DELAY_MS` and friends) apply to Blockscout. Those apply only to the
+Worker-bound owner and sell-simulation checks, which run after first render.
+
 ## Troubleshooting network connectivity
 
 If **Network status** shows "Connection failed" (both the Blockscout

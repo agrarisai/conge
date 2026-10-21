@@ -112,6 +112,53 @@ const PROBE_RECIPIENT_ADDRESS = "0x" + "ab".repeat(20);
 // of guessing at one; see testWorkerConnection.
 let lastScannedTokenAddress = null;
 
+// --- Debug timing --------------------------------------------------------
+
+// Opt-in stage timing for a scan, printed with console.table once the
+// scan finishes. Enable with ?debug=timing in the page URL, or
+// persistently with localStorage.setItem("conge:debug-timing", "1").
+// Timing is always recorded (a few performance.now() calls — negligible),
+// only the console output is gated.
+const DEBUG_TIMING = (() => {
+  try {
+    return (
+      new URLSearchParams(window.location.search).get("debug") === "timing" ||
+      window.localStorage.getItem("conge:debug-timing") === "1"
+    );
+  } catch {
+    return false;
+  }
+})();
+
+function createScanTimer() {
+  const t0 = performance.now();
+  const rows = [];
+  const ms = (t) => Math.round(t - t0);
+  return {
+    // Times one awaited step, recording when it started and finished
+    // relative to the start of the scan.
+    async time(stage, promise) {
+      const start = performance.now();
+      try {
+        return await promise;
+      } finally {
+        const end = performance.now();
+        rows.push({ stage, start_ms: ms(start), end_ms: ms(end), duration_ms: Math.round(end - start) });
+      }
+    },
+    // Records a point-in-time milestone (e.g. first render).
+    mark(stage) {
+      const now = performance.now();
+      rows.push({ stage, start_ms: 0, end_ms: ms(now), duration_ms: ms(now) });
+    },
+    report(address) {
+      if (!DEBUG_TIMING || rows.length === 0) return;
+      console.info(`[Conge] scan timing for ${address} (ms since Scan was tapped)`);
+      console.table([...rows].sort((a, b) => a.end_ms - b.end_ms));
+    },
+  };
+}
+
 // --- Shared fetch/diagnostics helpers -----------------------------------
 
 // Low-level fetch with a timeout, returning either the raw Response (plus
@@ -1381,36 +1428,78 @@ async function scanToken(rawAddress) {
   lastScannedTokenAddress = address;
 
   setScanBusy(true);
+  const timer = createScanTimer();
 
   try {
-    // fetchOwnerViaWorker is deliberately NOT in this Promise.all — see
-    // the owner()/sell-simulation sequencing note below, right before
-    // it's actually called.
-    const [addressResult, tokenResult, contractResult, holdersResult] = await Promise.all([
+    // Every Blockscout call starts as early as its own inputs allow, so
+    // first render waits only on the slowest dependency chain — not on
+    // the sum of them. The four primary lookups need nothing but the
+    // address and start immediately. Each of the two follow-ups is
+    // chained onto just the one response it needs: the creation tx (for
+    // token age) on /addresses, the proxy admin lookup on
+    // /smart-contracts — never on the whole group, and never on each
+    // other. Blockscout is not the rate-limited Worker/RPC, so none of
+    // the Worker spacing/retry delays (CHUNK_DELAY_MS etc.) apply here.
+    // fetchOwnerViaWorker is deliberately NOT part of this — see the
+    // owner()/sell-simulation sequencing note below, right before it's
+    // actually called.
+    const addressPromise = timer.time(
+      "Blockscout /addresses/{address}",
       fetchBlockscout(`/addresses/${address}`, `${BLOCKSCOUT_SOURCE} — GET /addresses/{address}`),
+    );
+    const tokenPromise = timer.time(
+      "Blockscout /tokens/{address}",
       fetchBlockscout(`/tokens/${address}`, `${BLOCKSCOUT_SOURCE} — GET /tokens/{address}`),
+    );
+    const contractPromise = timer.time(
+      "Blockscout /smart-contracts/{address}",
       fetchBlockscout(`/smart-contracts/${address}`, `${BLOCKSCOUT_SOURCE} — GET /smart-contracts/{address}`),
+    );
+    const holdersPromise = timer.time(
+      "Blockscout /tokens/{address}/holders",
       fetchBlockscout(`/tokens/${address}/holders`, `${BLOCKSCOUT_SOURCE} — GET /tokens/{address}/holders`),
-    ]);
+    );
 
     // The creation transaction's timestamp (for token age) needs the
     // creation tx hash from /addresses first, so it's a follow-up call.
-    const creationTxHash = addressResult.ok
-      ? (addressResult.body.creation_transaction_hash ?? addressResult.body.creation_tx_hash ?? null)
-      : null;
-    const txResult = creationTxHash
-      ? await fetchBlockscout(`/transactions/${creationTxHash}`, `${BLOCKSCOUT_SOURCE} — GET /transactions/{hash}`)
-      : null;
+    const txPromise = addressPromise.then((addressResult) => {
+      const creationTxHash = addressResult.ok
+        ? (addressResult.body.creation_transaction_hash ?? addressResult.body.creation_tx_hash ?? null)
+        : null;
+      return creationTxHash
+        ? timer.time(
+            "Blockscout /transactions/{hash} (after /addresses)",
+            fetchBlockscout(`/transactions/${creationTxHash}`, `${BLOCKSCOUT_SOURCE} — GET /transactions/{hash}`),
+          )
+        : null;
+    });
 
     // Blockscout's proxy admin field name is unconfirmed from this
     // environment (see README) — this is a best-effort guess with a
     // graceful no-op fallback: if the field isn't there (likely), the
     // proxy-upgrade check simply falls back to its verified/unverified
     // rule without ever fabricating an admin-type escalation.
-    const proxyAdmin = contractResult.ok ? (contractResult.body.proxy_admin ?? contractResult.body.admin ?? null) : null;
-    const proxyAdminResult = proxyAdmin
-      ? await fetchBlockscout(`/addresses/${proxyAdmin}`, `${BLOCKSCOUT_SOURCE} — GET /addresses/{proxy_admin}`)
-      : null;
+    const proxyAdminFrom = (contractResult) =>
+      contractResult.ok ? (contractResult.body.proxy_admin ?? contractResult.body.admin ?? null) : null;
+    const proxyAdminPromise = contractPromise.then((contractResult) => {
+      const admin = proxyAdminFrom(contractResult);
+      return admin
+        ? timer.time(
+            "Blockscout /addresses/{proxy_admin} (after /smart-contracts)",
+            fetchBlockscout(`/addresses/${admin}`, `${BLOCKSCOUT_SOURCE} — GET /addresses/{proxy_admin}`),
+          )
+        : null;
+    });
+
+    const [addressResult, tokenResult, contractResult, holdersResult, txResult, proxyAdminResult] = await Promise.all([
+      addressPromise,
+      tokenPromise,
+      contractPromise,
+      holdersPromise,
+      txPromise,
+      proxyAdminPromise,
+    ]);
+    const proxyAdmin = proxyAdminFrom(contractResult);
     const proxyAdminIsContract =
       proxyAdminResult?.ok && typeof proxyAdminResult.body.is_contract === "boolean"
         ? proxyAdminResult.body.is_contract
@@ -1555,6 +1644,7 @@ async function scanToken(rawAddress) {
     renderRiskLevelPending();
 
     scanResultEl.hidden = false;
+    timer.mark("First render (all Blockscout data shown)");
 
     showTechDetailsIfNeeded();
 
@@ -1572,9 +1662,12 @@ async function scanToken(rawAddress) {
     // retries. If it's still rate-limited after that, the honest
     // "Unknown" outcome (with its real diagnostics) is what replaces the
     // pending row — never a dead spinner, never a generic error flash.
-    const ownerOutcome = await withWholeCheckRateLimitRetry(
-      () => fetchOwnerViaWorker(address),
-      (r) => r.owner === null && hasRateLimitedDiagnostic(r.diagnostics),
+    const ownerOutcome = await timer.time(
+      "Worker owner() check",
+      withWholeCheckRateLimitRetry(
+        () => fetchOwnerViaWorker(address),
+        (r) => r.owner === null && hasRateLimitedDiagnostic(r.diagnostics),
+      ),
     );
     const { owner, diagnostics: ownerDiagnostics } = ownerOutcome;
     const ownerFinding = scoreOwnerStatus(owner, ownerDiagnostics);
@@ -1585,9 +1678,12 @@ async function scanToken(rawAddress) {
 
     await sleep(CHUNK_DELAY_MS);
 
-    const sellSimulation = await withWholeCheckRateLimitRetry(
-      () => runSellSimulation(address, holders),
-      (r) => r.status === "unreachable" && hasRateLimitedDiagnostic(r.diagnostics),
+    const sellSimulation = await timer.time(
+      "Worker sell simulation",
+      withWholeCheckRateLimitRetry(
+        () => runSellSimulation(address, holders),
+        (r) => r.status === "unreachable" && hasRateLimitedDiagnostic(r.diagnostics),
+      ),
     );
     const sellSimFinding = scoreSellSimulation(sellSimulation);
     resolvePendingFinding("sell-simulation", sellSimFinding, sellSimulation);
@@ -1596,8 +1692,10 @@ async function scanToken(rawAddress) {
     // be computed (and the gauge settled) now, not before.
     const overallLevel = computeOverallLevel([...blockscoutFindings, ownerFinding, sellSimFinding]);
     renderRiskLevelFinal(overallLevel);
+    timer.mark("Final verdict shown");
   } finally {
     setScanBusy(false);
+    timer.report(address);
     // The scan has finished — with a result, or with a clear error such
     // as "this is a wallet address" — so the current URL now reproduces
     // it. Covers every exit path of the try block above.
