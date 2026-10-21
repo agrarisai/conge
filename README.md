@@ -703,8 +703,23 @@ changes needed as long as the filename stays the same.
 Add `?debug=timing` to the page URL (or run
 `localStorage.setItem("conge:debug-timing", "1")` in the console to keep
 it on). Every scan then reports its stages, in ms since Scan was tapped:
-each Blockscout call, **First render** (all Blockscout data shown), the
-Worker owner and sell-simulation checks, and **Final verdict shown**.
+
+- each Blockscout call
+- **First partial render** (token + holders shown)
+- **Check resolved** rows for contract verification, owner privileges and
+  token age
+- the Worker owner and sell-simulation checks
+- **Final verdict shown**
+
+Each Blockscout row also shows three diagnostic columns:
+
+- `status`: `200`, `http 404`, `timeout` and so on
+- `net`: how long the browser itself spent on that network request
+- `ttfb`: time to first byte, shown only if Blockscout sends
+  `Timing-Allow-Origin`
+
+If `net` ≈ `ms`, the time was spent waiting on Blockscout, not in Conge's
+code.
 
 - **On a phone (easiest):** just open the page with `?debug=timing`. A
   small dark debug panel is pinned to the bottom of the screen and fills
@@ -716,14 +731,31 @@ Worker owner and sell-simulation checks, and **Final verdict shown**.
 
 Without the flag there is no panel and nothing is logged.
 
-All Blockscout calls start as early as their own inputs allow. The four
-primary lookups (`/addresses`, `/tokens`, `/smart-contracts`,
-`/tokens/{address}/holders`) start together. The creation-tx lookup (token
-age) waits only for `/addresses`, and the proxy-admin lookup waits only for
-`/smart-contracts`. First render therefore costs the slowest dependency
-chain, not the sum. None of the Worker rate-limit spacing or retries
-(`CHUNK_DELAY_MS` and friends) apply to Blockscout. Those apply only to the
-Worker-bound owner and sell-simulation checks, which run after first render.
+Rendering is progressive. All Blockscout calls start as early as their
+own inputs allow:
+
+- The four primary lookups (`/addresses`, `/tokens`, `/smart-contracts`,
+  `/tokens/{address}/holders`) start together.
+- The creation-tx lookup (token age) waits only for `/addresses`.
+- The proxy-admin lookup waits only for `/smart-contracts`.
+
+The result card appears as soon as `/tokens` and `/holders` answer. At that
+point it shows name/symbol, supply, holder concentration, holder count and
+market data. Three Blockscout-backed checks then fill in their own "Checking…"
+rows independently, whenever their own data arrives:
+
+- contract verification, from `/smart-contracts` or `/addresses`, whichever
+  gives a definitive answer first
+- owner privileges, from `/smart-contracts` and the proxy admin
+- token age, from `/addresses` then `/transactions`
+
+The Worker owner and sell-simulation rows work the same way. The risk
+gauge stays at "Finalizing risk level…" until every check that affects
+scoring has resolved.
+
+None of the Worker rate-limit spacing or retries (`CHUNK_DELAY_MS` and
+friends) apply to Blockscout. Each Blockscout request is a single `fetch`
+with a 10s timeout and no retry.
 
 ## Troubleshooting network connectivity
 
