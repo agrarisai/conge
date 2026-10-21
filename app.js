@@ -22,6 +22,8 @@ import {
   decodeAddressResult,
   decodeTransferOutcome,
   THRESHOLDS,
+  lacksTokenMetadata,
+  classifyScanTarget,
 } from "./scoring.js";
 
 // Cloudflare Worker RPC proxy (see worker/) — a thin, read-only JSON-RPC
@@ -1806,19 +1808,38 @@ async function scanToken(rawAddress) {
     const [tokenResult, holdersResult] = await Promise.all([tokenPromise, holdersPromise]);
     if (!isCurrentScan()) return;
 
-    // A recognized token is by definition a contract. Only when /tokens
-    // didn't recognize the address do we wait on /addresses first, to
-    // tell "this is a wallet" (nothing to scan) apart from "a contract
-    // that isn't a recognized token" before rendering anything.
-    if (!tokenResult.ok) {
+    // Is there a token to analyze at all? A recognized token (with name/
+    // symbol/decimals) is by definition a contract, so /addresses is only
+    // waited on when /tokens didn't recognize one — to tell a wallet, a
+    // contract that isn't a standard token, and "couldn't tell" apart
+    // before rendering anything. Those stop here with a clear message
+    // rather than a risk card full of "Unavailable" fields and a verdict
+    // that would mean nothing.
+    const tokenStatus = tokenResult.ok ? "found" : isBenignNotFound(tokenResult) ? "not-found" : "failed";
+    let isContract = null;
+    if (tokenStatus !== "found" || lacksTokenMetadata(tokenResult.body)) {
       const addressResult = await addressPromise;
       if (!isCurrentScan()) return;
-      if (addressResult.ok && !addressResult.body.is_contract) {
-        scanErrorEl.textContent =
-          "This is a wallet address, not a token contract — it has no contract code on-chain, so there's nothing to scan. Double-check you copied the token's contract address rather than a wallet address.";
-        scanErrorEl.hidden = false;
-        return;
-      }
+      isContract = addressResult.ok ? Boolean(addressResult.body.is_contract) : null;
+    }
+    const targetKind = classifyScanTarget({
+      token: tokenStatus,
+      tokenBody: tokenResult.ok ? tokenResult.body : null,
+      isContract,
+    });
+    const STOP_MESSAGE = {
+      wallet:
+        "This is a wallet address, not a token contract — it has no contract code on-chain, so there's nothing to scan. Double-check you copied the token's contract address rather than a wallet address.",
+      "non-token-contract":
+        "This address has contract code, but it doesn't look like a standard token (no name, symbol or decimals) — Conge can't analyze it. Double-check you copied the token's own contract address, not a router, pool or other contract.",
+      "not-a-token-unconfirmed":
+        "The block explorer doesn't list this address as a token, and it couldn't confirm what else it is right now — Conge can't analyze it. Double-check the address, or try again in a moment.",
+    };
+    if (STOP_MESSAGE[targetKind]) {
+      scanErrorEl.textContent = STOP_MESSAGE[targetKind];
+      scanErrorEl.hidden = false;
+      timer.mark(`Stopped: ${targetKind}`);
+      return;
     }
 
     const tokenBody = tokenResult.ok ? tokenResult.body : null;
