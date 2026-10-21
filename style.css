@@ -593,6 +593,60 @@ main {
   font-weight: 600;
 }
 
+/* Heading row: the check's name, then a small severity tag showing the
+   most severe result that check can produce. The tag reuses the scan
+   result's own finding marker (the same dot-and-dash SVG, in the same
+   tone-*-border colour) on the matching tone-*-bg / tone-*-text pair, so
+   the documentation reads in the product's own visual language. */
+.check-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.6rem;
+}
+
+.severity-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0.6rem 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.severity-tag .finding-marker {
+  width: 22px;
+  height: 6px;
+  margin-top: 0;
+}
+
+.severity-tag-high {
+  background-color: var(--tone-rose-bg);
+  color: var(--tone-rose-text);
+}
+.severity-tag-high .finding-marker { color: var(--tone-rose-border); }
+
+.severity-tag-medium {
+  background-color: var(--tone-amber-bg);
+  color: var(--tone-amber-text);
+}
+.severity-tag-medium .finding-marker { color: var(--tone-amber-border); }
+
+.severity-tag-low {
+  background-color: var(--tone-green-bg);
+  color: var(--tone-green-text);
+}
+.severity-tag-low .finding-marker { color: var(--tone-green-border); }
+
+.severity-tag-info {
+  background-color: var(--tone-neutral-bg);
+  color: var(--color-slate);
+}
+.severity-tag-info .finding-marker { color: var(--tone-neutral-border); }
+
 .check-item p {
   margin: 0.3rem 0 0;
   font-size: 0.85rem;
@@ -611,17 +665,67 @@ main {
 .faq-item {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
+}
+
+/* FAQ accordion (see faq.js). Each question is a real <button> in a
+   heading, with aria-expanded and a chevron that turns to point up when
+   its answer is open. The whole row is the tap target (at least 44px). */
+.faq-item .faq-question {
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.faq-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 44px;
   padding: 0.8rem 0.95rem;
-}
-
-.faq-item summary {
-  cursor: pointer;
-  font-weight: 600;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-body);
   font-size: 0.925rem;
+  font-weight: 600;
+  line-height: 1.45;
+  text-align: left;
+  color: var(--color-ink);
+  cursor: pointer;
 }
 
-.faq-item summary:hover {
+.faq-toggle:hover {
   color: var(--color-slate);
+}
+
+/* Chevron drawn from two borders: pointing down when closed, up when open. */
+.faq-icon {
+  flex-shrink: 0;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: 0.15rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 0.2s ease;
+}
+
+.faq-toggle[aria-expanded="true"] .faq-icon {
+  transform: translateY(2px) rotate(-135deg);
+}
+
+/* The only motion: a short height transition while opening/closing.
+   Padding lives on the inner wrapper so a collapsed answer is truly
+   zero-height. */
+.faq-answer {
+  overflow: hidden;
+  transition: height 0.22s ease;
+}
+
+.faq-answer-inner {
+  padding: 0 0.95rem 0.85rem;
 }
 
 .faq-item p {
@@ -630,30 +734,59 @@ main {
   color: var(--color-slate);
 }
 
+.faq-item p:first-child {
+  margin-top: 0;
+}
+
 .faq-item p a {
   color: var(--color-ink);
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .faq-icon,
+  .faq-answer {
+    transition: none;
+  }
+}
+
 /* --- Intro block --------------------------------------------------- */
 
+/* Page hero: the headline is the single most important line on the
+   page — clearly larger and heavier than the header wordmark (1.375rem,
+   600) — then one supporting line, then a deliberate extra step of space
+   (on top of main's 1.25rem gap, 2rem in all) before the first card, so
+   the hero reads as its own block rather than the first item of a list.
+   Shared by the home hero and the About / How it works / FAQ intros. */
 .intro {
-  padding: 0.25rem 0.1rem 0.25rem;
+  padding: 0.5rem 0.1rem 0;
+  margin-bottom: 0.75rem;
+}
+
+.intro-eyebrow {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-slate);
 }
 
 .intro-headline {
   margin: 0;
   font-family: var(--font-heading);
-  font-size: 1.375rem;
-  font-weight: 600;
-  line-height: 1.3;
-  letter-spacing: -0.01em;
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
 }
 
 .intro-sub {
-  margin: 0.5rem 0 0;
-  font-size: 0.925rem;
+  margin: 0.75rem 0 0;
+  font-size: 1rem;
+  line-height: 1.55;
   color: var(--color-slate);
-  max-width: 46ch;
+  max-width: 44ch;
 }
 
 /* --- Section labels (small, calm — never tracked-out caps) --------- */
@@ -1376,7 +1509,7 @@ input[type="text"]::placeholder {
   --footer-space-2: 1rem;
   --footer-space-3: 1.5rem;
   --footer-space-4: 2.5rem;
-  /* Soft slate-tinted hairline — low-contrast divider, not black. */
+  /* Soft slate tint for the footer's dashed divider — low contrast, not black. */
   --footer-rule: rgb(99 102 95 / 22%);
 
   margin-top: var(--footer-space-4);
@@ -1469,7 +1602,13 @@ input[type="text"]::placeholder {
   max-width: 640px;
   margin: var(--footer-space-2) auto 0;
   padding-top: var(--footer-space-3);
-  border-top: 1px solid var(--footer-rule);
+  /* A short dashed rule rather than a plain hairline: 6px dashes, 6px
+     apart — the same rhythm as the dashes in the logo mark and the scan
+     findings' markers — in the footer's soft slate tint. */
+  background-image: repeating-linear-gradient(90deg, var(--footer-rule) 0 6px, transparent 6px 12px);
+  background-repeat: no-repeat;
+  background-position: top left;
+  background-size: 100% 1px;
   font-size: 0.8125rem;
   line-height: 1.6;
   color: var(--color-slate);
@@ -1522,7 +1661,7 @@ input[type="text"]::placeholder {
   }
 
   .intro-headline {
-    font-size: 1.625rem;
+    font-size: 2.125rem;
   }
 
   .risk-level-value {

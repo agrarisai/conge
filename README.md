@@ -614,6 +614,7 @@ faq.html             # content page — see "Pages" below
 disclaimer.html      # content page — see "Pages" below
 style.css            # styling for every page above (mobile-first, light theme)
 nav.js                # shared header hamburger-nav toggle, loaded by every page
+faq.js                # FAQ accordion (faq.html only; answers stay visible without JS)
 scroll-fx.js          # background parallax (every page) + the one scroll-sweep moment (index.html), see Design
 app.js               # app logic for index.html only (ES module, imports viem utils + scoring.js)
 scoring.js           # Risk Score v1 — pure, rule-based scoring + ABI helpers
