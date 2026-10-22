@@ -31,7 +31,7 @@
     rel="stylesheet"
   />
 
-  <link rel="stylesheet" href="style.css?v=2fc59d4d5a" />
+  <link rel="stylesheet" href="style.css?v=11bfb60e2b" />
 </head>
 <body class="page-scanner">
   <div class="bg-rings" aria-hidden="true"></div>
@@ -163,6 +163,14 @@
         </button>
       </form>
 
+      <!-- Filled in by app.js from this browser's localStorage only; stays
+           hidden until there's at least one past scan on this device. -->
+      <div id="scan-history" class="scan-history" hidden>
+        <p class="scan-history-label" id="scan-history-label">Recently scanned (this device)</p>
+        <ul class="scan-history-list" id="scan-history-list" aria-labelledby="scan-history-label"></ul>
+        <p class="scan-history-note">Saved only in this browser. Never sent anywhere, shared, or tracked.</p>
+      </div>
+
       <div id="scan-result" class="result-card" hidden>
         <div class="result-card-header">
           <h3 id="scan-result-title">Token</h3>
@@ -268,6 +276,82 @@
         <pre id="scan-tech-details-content"></pre>
       </details>
     </section>
+
+    <!-- A static, illustrative result — invented data for a made-up token,
+         built from the same result-card markup and classes as a real scan
+         (no ids, no buttons, nothing interactive). Hidden by app.js as soon
+         as a real scan starts. -->
+    <section id="scan-example" class="card example-card" aria-labelledby="scan-example-heading" aria-describedby="scan-example-note">
+      <div class="example-card-header">
+        <h2 id="scan-example-heading">What a scan looks like</h2>
+        <span class="example-badge">Example</span>
+      </div>
+      <p class="example-note" id="scan-example-note">
+        A sample result for a made-up token, with invented data. It's not a real scan and
+        isn't interactive. Enter an address above to scan a real token.
+      </p>
+
+      <div class="result-card example-result">
+        <div class="result-card-header">
+          <h3><span class="visually-hidden">Example: </span>Quillfern <span class="token-symbol-tag">QFRN</span></h3>
+        </div>
+
+        <div class="risk-summary">
+          <div class="risk-headline">
+            <div class="risk-gauge-wrap">
+              <svg class="risk-gauge" viewBox="0 0 240 140" aria-hidden="true" focusable="false">
+                <path class="gauge-guide-ring" d="M 38 120 A 82 82 0 0 1 202 120"></path>
+                <path class="gauge-zone gauge-zone-low" d="M 20 120 A 100 100 0 0 1 70 33.4"></path>
+                <path class="gauge-zone gauge-zone-medium" d="M 70 33.4 A 100 100 0 0 1 170 33.4"></path>
+                <path class="gauge-zone gauge-zone-high" d="M 170 33.4 A 100 100 0 0 1 220 120"></path>
+                <g transform="translate(120,120)">
+                  <g class="gauge-needle-rotor" style="transform: rotate(0deg); transition: none">
+                    <line class="gauge-needle" x1="0" y1="0" x2="0" y2="-84"></line>
+                    <circle class="gauge-needle-tip" cx="0" cy="-84" r="4"></circle>
+                  </g>
+                  <circle class="gauge-hub" cx="0" cy="0" r="9"></circle>
+                </g>
+              </svg>
+              <div class="risk-gauge-caption">
+                <span class="risk-level-label"><span class="visually-hidden">Example </span>Risk level</span>
+                <span class="risk-level-value risk-level-medium">Medium</span>
+              </div>
+            </div>
+            <p class="risk-summary-sentence">A few things here are worth a closer look before you trust this token.</p>
+          </div>
+
+          <div class="risk-findings">
+            <div class="risk-findings-group">
+              <h4>Medium risk (1)</h4>
+              <div class="risk-finding risk-finding-medium">
+                <svg class="finding-marker" viewBox="0 0 34 9" aria-hidden="true" focusable="false"><circle cx="3.5" cy="4.5" r="3"></circle><line x1="13" y1="4.5" x2="19" y2="4.5"></line><line x1="25" y1="4.5" x2="31" y2="4.5"></line></svg>
+                <div class="finding-body">
+                  <p class="risk-finding-title">Largest holder owns 34.2% of supply: worth watching</p>
+                  <p class="risk-finding-detail">A single holder controls a meaningful share of supply — enough to move the price noticeably if it sold.</p>
+                </div>
+              </div>
+            </div>
+            <div class="risk-findings-group">
+              <h4>Passed (2)</h4>
+              <div class="risk-finding risk-finding-passed">
+                <svg class="finding-marker" viewBox="0 0 34 9" aria-hidden="true" focusable="false"><circle cx="3.5" cy="4.5" r="3"></circle><line x1="13" y1="4.5" x2="19" y2="4.5"></line><line x1="25" y1="4.5" x2="31" y2="4.5"></line></svg>
+                <div class="finding-body">
+                  <p class="risk-finding-title">Source code verified</p>
+                  <p class="risk-finding-detail">The contract's source code is published and verified on the block explorer.</p>
+                </div>
+              </div>
+              <div class="risk-finding risk-finding-passed">
+                <svg class="finding-marker" viewBox="0 0 34 9" aria-hidden="true" focusable="false"><circle cx="3.5" cy="4.5" r="3"></circle><line x1="13" y1="4.5" x2="19" y2="4.5"></line><line x1="25" y1="4.5" x2="31" y2="4.5"></line></svg>
+                <div class="finding-body">
+                  <p class="risk-finding-title">Sell simulation passed</p>
+                  <p class="risk-finding-detail">A simulated transfer to both an ordinary address and a detected liquidity pool succeeded. This is an indicator, not a guarantee — it can't detect every trap (see “What Conge cannot detect” on the How it works page).</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <footer class="site-footer">
@@ -309,6 +393,6 @@
   </script>
   <script src="nav.js?v=b981a0accb" defer></script>
   <script src="scroll-fx.js?v=67bfb40a43" defer></script>
-  <script type="module" src="app.js?v=75542442cf"></script>
+  <script type="module" src="app.js?v=b9ed3cd035"></script>
 </body>
 </html>

@@ -1129,6 +1129,132 @@ input[type="text"]::placeholder {
   margin: 0.5rem 0 0;
 }
 
+/* --- Recent scans (this device only) -----------------------------------
+   Up to five past scans from this browser's localStorage, as small
+   chips under the scan form; tapping one re-runs it. Hidden entirely
+   until there's at least one (see renderScanHistory in app.js). Each
+   chip's dot uses the same tone colours as the finding markers. */
+.scan-history {
+  margin-top: 1rem;
+}
+
+.scan-history-label {
+  margin: 0 0 0.4rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-slate);
+}
+
+.scan-history-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scan-history-list li {
+  max-width: 100%;
+}
+
+.history-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 0 0.85rem;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--color-ink);
+  cursor: pointer;
+}
+
+.history-chip:hover {
+  background-color: var(--tone-neutral-bg);
+}
+
+.history-chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.history-chip-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 22ch;
+}
+
+.history-dot {
+  flex-shrink: 0;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background-color: var(--tone-neutral-border);
+}
+
+.history-dot-high { background-color: var(--tone-rose-border); }
+.history-dot-medium { background-color: var(--tone-amber-border); }
+.history-dot-low { background-color: var(--tone-green-border); }
+
+.scan-history-note {
+  margin: 0.45rem 0 0;
+  font-size: 0.75rem;
+  color: var(--color-slate);
+}
+
+/* --- Example result (index.html) -------------------------------------
+   A static sample built from the real result-card markup and classes,
+   so it looks exactly like a scan result — but labelled unmistakably as
+   an example: a heading, an EXAMPLE badge, a plain-language note, and
+   no buttons or interactive parts. Hidden once a real scan starts. */
+.example-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.example-card-header h2 {
+  margin: 0;
+}
+
+.example-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.55rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background-color: var(--tone-neutral-bg);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-slate);
+}
+
+.example-note {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: var(--color-slate);
+}
+
+.example-result {
+  margin-top: 1rem;
+}
+
+.example-result .risk-summary {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
 /* --- Technical details: inset mono code blocks ---------------------- */
 
 .tech-details {

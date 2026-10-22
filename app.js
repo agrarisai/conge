@@ -1096,6 +1096,9 @@ const resultMarketCapEl = document.getElementById("result-market-cap");
 const resultSourceEl = document.getElementById("result-source");
 
 const exampleScanButton = document.getElementById("example-scan-button");
+const scanHistoryEl = document.getElementById("scan-history");
+const scanHistoryListEl = document.getElementById("scan-history-list");
+const scanExampleEl = document.getElementById("scan-example");
 const copyLinkButton = document.getElementById("copy-link-button");
 const copyLinkButtonLabelEl = document.getElementById("copy-link-button-label");
 const copyLinkStatusEl = document.getElementById("copy-link-status");
@@ -1124,6 +1127,7 @@ function setScanBusy(isBusy) {
   scanButton.disabled = isBusy;
   rescanButton.disabled = isBusy;
   exampleScanButton.disabled = isBusy;
+  setHistoryChipsDisabled(isBusy);
   scanButtonLabelEl.textContent = isBusy ? "Scanning…" : "Scan";
   rescanButtonLabelEl.textContent = isBusy ? "Scanning…" : "Rescan";
 }
@@ -1143,6 +1147,7 @@ function startScanCooldown() {
   scanButton.disabled = true;
   rescanButton.disabled = true;
   exampleScanButton.disabled = true;
+  setHistoryChipsDisabled(true);
   scanButton.classList.add("is-cooling-down");
   rescanButton.classList.add("is-cooling-down");
 
@@ -1161,6 +1166,120 @@ function startScanCooldown() {
   };
   tick();
   scanCooldownTimer = setInterval(tick, 250);
+}
+
+// --- Recent scans (this device only) ---------------------------------------
+//
+// The last few completed scans, kept in this browser's localStorage and
+// nowhere else — never sent to any server, never shared between visitors.
+// Shown as chips under the scan form; tapping one re-runs that scan.
+// Recorded only for scans that actually finished: a final risk level, or a
+// clear "wallet" / "not a standard token" answer — never for input that
+// failed validation (it never reached the network) or a scan that was
+// superseded. Every storage access is wrapped in try/catch: private
+// browsing, blocked storage or a full quota just mean no persistence (an
+// in-memory copy still works for the current visit), never a broken page.
+const SCAN_HISTORY_KEY = "conge:scan-history";
+const SCAN_HISTORY_MAX = 5;
+const HISTORY_LEVEL_TEXT = {
+  High: "High risk",
+  Medium: "Medium risk",
+  Low: "Low risk",
+  "Insufficient data": "insufficient data",
+  "Not a token": "not a token",
+  Wallet: "wallet address",
+};
+let scanHistoryCache = null;
+
+function cleanHistoryEntry(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  if (typeof entry.address !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(entry.address)) return null;
+  const text = (v) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 40) : null);
+  return {
+    address: entry.address,
+    name: text(entry.name),
+    symbol: text(entry.symbol),
+    level: Object.hasOwn(HISTORY_LEVEL_TEXT, entry.level) ? entry.level : null,
+  };
+}
+
+function readScanHistory() {
+  if (scanHistoryCache) return scanHistoryCache;
+  let list = [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SCAN_HISTORY_KEY) || "[]");
+    if (Array.isArray(parsed)) list = parsed.map(cleanHistoryEntry).filter(Boolean).slice(0, SCAN_HISTORY_MAX);
+  } catch {
+    list = [];
+  }
+  scanHistoryCache = list;
+  return list;
+}
+
+function recordScanHistory({ address, name, symbol, level }) {
+  const entry = cleanHistoryEntry({ address, name, symbol, level });
+  if (!entry) return;
+  const list = [entry, ...readScanHistory().filter((e) => e.address.toLowerCase() !== entry.address.toLowerCase())].slice(
+    0,
+    SCAN_HISTORY_MAX,
+  );
+  scanHistoryCache = list;
+  try {
+    window.localStorage.setItem(SCAN_HISTORY_KEY, JSON.stringify(list));
+  } catch {
+    // Storage unavailable — the in-memory copy still shows this visit.
+  }
+  renderScanHistory();
+}
+
+function historyChipText(entry) {
+  if (entry.name && entry.symbol) return `${entry.name} (${entry.symbol})`;
+  return entry.symbol || entry.name || `${entry.address.slice(0, 6)}…${entry.address.slice(-4)}`;
+}
+
+function historyTone(level) {
+  return level === "High" ? "high" : level === "Medium" ? "medium" : level === "Low" ? "low" : "neutral";
+}
+
+function setHistoryChipsDisabled(disabled) {
+  if (!scanHistoryListEl) return;
+  for (const chip of scanHistoryListEl.querySelectorAll(".history-chip")) chip.disabled = disabled;
+}
+
+function renderScanHistory() {
+  if (!scanHistoryEl || !scanHistoryListEl) return;
+  const list = readScanHistory();
+  scanHistoryListEl.replaceChildren(
+    ...list.map((entry) => {
+      const li = document.createElement("li");
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "history-chip";
+      chip.title = entry.address;
+      const label = historyChipText(entry);
+      const levelText = HISTORY_LEVEL_TEXT[entry.level];
+      chip.setAttribute("aria-label", `Scan again: ${label}${levelText ? `, ${levelText}` : ""}`);
+      chip.disabled = scanButton.disabled;
+
+      const dot = document.createElement("span");
+      dot.className = `history-dot history-dot-${historyTone(entry.level)}`;
+      dot.setAttribute("aria-hidden", "true");
+      const text = document.createElement("span");
+      text.className = "history-chip-text";
+      text.textContent = label;
+      chip.append(dot, text);
+
+      chip.addEventListener("click", () => {
+        if (scanButton.disabled) return;
+        tokenAddressInput.value = entry.address;
+        scanToken(entry.address);
+      });
+      li.appendChild(chip);
+      return li;
+    }),
+  );
+  // No history yet (first visit, or storage unavailable): show nothing.
+  scanHistoryEl.hidden = list.length === 0;
 }
 
 // Findings are grouped by outcome, not just severity: a check that
@@ -1650,6 +1769,10 @@ async function scanToken(rawAddress) {
   // contract instead of guessing at one — see testWorkerConnection below.
   lastScannedTokenAddress = address;
 
+  // The static example result has done its job once a real scan starts;
+  // never show it next to (and confusable with) a real result.
+  if (scanExampleEl) scanExampleEl.hidden = true;
+
   setScanBusy(true);
   const timer = createScanTimer(address);
 
@@ -1876,6 +1999,9 @@ async function scanToken(rawAddress) {
       scanErrorEl.textContent = STOP_MESSAGE[targetKind];
       scanErrorEl.hidden = false;
       timer.mark(`Stopped: ${targetKind}`);
+      if (targetKind === "wallet" || targetKind === "non-token-contract") {
+        recordScanHistory({ address, level: targetKind === "wallet" ? "Wallet" : "Not a token" });
+      }
       return;
     }
 
@@ -2033,6 +2159,13 @@ async function scanToken(rawAddress) {
       sellSimFinding,
     ]);
     renderRiskLevelFinal(overallLevel);
+    const addressResultForName = await addressPromise;
+    recordScanHistory({
+      address,
+      name: name ?? (addressResultForName.ok ? (addressResultForName.body.name ?? null) : null),
+      symbol,
+      level: overallLevel,
+    });
     timer.mark("Final verdict shown");
   } finally {
     // A newer scan has taken over (its own setScanBusy/URL handling
@@ -2185,6 +2318,8 @@ checkNetworkStatus();
 // Show the (empty) debug panel straight away when the flag is on, so it's
 // clear debug mode is active before the first scan.
 getDebugPanel();
+
+renderScanHistory();
 
 // A shared scan link (?address=0x…) reproduces its scan immediately.
 const sharedAddress = addressFromUrl();
