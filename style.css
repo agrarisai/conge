@@ -1157,6 +1157,26 @@ input[type="text"]::placeholder {
   display: none;
 }
 
+/* Scan, plus Cancel beside it while a scan is in flight. Scan keeps the
+   full row when Cancel is hidden. */
+.scan-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.scan-actions .primary-button {
+  flex: 1;
+}
+
+.scan-actions .secondary-button {
+  margin-top: 0;
+  align-self: stretch;
+}
+
+.scan-actions .secondary-button[hidden] {
+  display: none;
+}
+
 /* Quiet, link-styled button (e.g. "Try an example") — deliberately
    secondary to the primary Scan button: no fill, no border, just accent
    text. Still a full 44px-tall tap target via min-height, and keyboard

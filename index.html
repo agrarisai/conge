@@ -31,7 +31,7 @@
     rel="stylesheet"
   />
 
-  <link rel="stylesheet" href="style.css?v=49e0dd3d77" />
+  <link rel="stylesheet" href="style.css?v=9b0e3523e4" />
 </head>
 <body class="page-scanner">
   <div class="bg-rings" aria-hidden="true"></div>
@@ -157,10 +157,14 @@
           <button id="example-scan-button" type="button" class="text-button">Try an example (USDG)</button>
         </div>
         <p id="address-error" class="error-message" hidden></p>
-        <button type="submit" class="primary-button" id="scan-button">
-          <span class="button-busy-dot" aria-hidden="true"></span>
-          <span id="scan-button-label">Scan</span>
-        </button>
+        <div class="scan-actions">
+          <button type="submit" class="primary-button" id="scan-button">
+            <span class="button-busy-dot" aria-hidden="true"></span>
+            <span id="scan-button-label">Scan</span>
+          </button>
+          <!-- Shown by app.js only while a scan is in flight. -->
+          <button type="button" class="secondary-button" id="cancel-scan-button" hidden>Cancel</button>
+        </div>
       </form>
 
       <!-- Filled in by app.js from this browser's localStorage only; stays
@@ -396,6 +400,6 @@
   </script>
   <script src="nav.js?v=b981a0accb" defer></script>
   <script src="scroll-fx.js?v=67bfb40a43" defer></script>
-  <script type="module" src="app.js?v=e38a2d1620"></script>
+  <script type="module" src="app.js?v=1fbbfcbb0b"></script>
 </body>
 </html>

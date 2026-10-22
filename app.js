@@ -90,16 +90,28 @@ function hasRateLimitedDiagnostic(diagnostics) {
 // waits WHOLE_CHECK_RATE_LIMIT_RETRY_DELAY_MS and runs it exactly once
 // more, returning whichever attempt's result (the retry's, win or lose —
 // never more than one extra attempt, and the honest "Unknown" outcome and
-// its real diagnostics are preserved either way, never hidden).
-async function withWholeCheckRateLimitRetry(runCheck, isRateLimited) {
+// its real diagnostics are preserved either way, never hidden). A
+// cancelled scan (`signal` aborted) never retries.
+async function withWholeCheckRateLimitRetry(runCheck, isRateLimited, signal) {
   const first = await runCheck();
-  if (!isRateLimited(first)) return first;
-  await sleep(WHOLE_CHECK_RATE_LIMIT_RETRY_DELAY_MS);
+  if (!isRateLimited(first) || signal?.aborted) return first;
+  await sleep(WHOLE_CHECK_RATE_LIMIT_RETRY_DELAY_MS, signal);
   return runCheck();
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+// Resolves after `ms`, or straight away (clearing its timer) once `signal`
+// aborts — so a cancelled scan never sits out its spacing/retry delays.
+function sleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timeoutId = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
 }
 
 // Top-level Worker jobs that can be triggered independently of each other
@@ -318,19 +330,27 @@ function createScanTimer(address) {
 // request failed. Used by both the Blockscout REST calls and the RPC
 // JSON-RPC probe so error classification (network/CORS vs HTTP vs
 // invalid body) is consistent across sources.
+//
+// `options.signal` (a scan's cancel signal) aborts the request too; that
+// failure is reported as kind "cancelled" rather than "timeout".
 async function fetchRaw(url, options, label) {
   const diagnostic = { url, label, pageOrigin: window.location.origin };
+  const { signal: cancelSignal, ...fetchOptions } = options;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const onCancel = () => controller.abort();
+  if (cancelSignal?.aborted) controller.abort();
+  else cancelSignal?.addEventListener("abort", onCancel, { once: true });
+  const abortKind = () => (cancelSignal?.aborted ? "cancelled" : "timeout");
 
   try {
     let response;
     try {
-      response = await fetch(url, { ...options, signal: controller.signal });
+      response = await fetch(url, { ...fetchOptions, signal: controller.signal });
     } catch (error) {
       diagnostic.errorName = error.name;
       diagnostic.errorMessage = error.message;
-      diagnostic.kind = error.name === "AbortError" ? "timeout" : "network-or-cors";
+      diagnostic.kind = error.name === "AbortError" ? abortKind() : "network-or-cors";
       return { ok: false, diagnostic };
     }
 
@@ -348,7 +368,7 @@ async function fetchRaw(url, options, label) {
     } catch (error) {
       diagnostic.errorName = error.name;
       diagnostic.errorMessage = error.message;
-      diagnostic.kind = error.name === "AbortError" ? "timeout" : "network-or-cors";
+      diagnostic.kind = error.name === "AbortError" ? abortKind() : "network-or-cors";
       return { ok: false, diagnostic };
     }
     diagnostic.bodySnippet = rawText.slice(0, 300);
@@ -362,15 +382,16 @@ async function fetchRaw(url, options, label) {
     return { ok: true, response, rawText, body, diagnostic };
   } finally {
     clearTimeout(timeoutId);
+    cancelSignal?.removeEventListener("abort", onCancel);
   }
 }
 
 // Fetches a Blockscout API v2 JSON endpoint. Non-2xx and non-JSON bodies
 // are reported as failures (with `status` attached so callers can special
 // -case e.g. 404) with a diagnostic ready for the Technical details panel.
-async function fetchBlockscout(path, label) {
+async function fetchBlockscout(path, label, signal) {
   const url = `${CONFIG.explorerApiUrl}${path}`;
-  const raw = await fetchRaw(url, { headers: { Accept: "application/json" } }, label);
+  const raw = await fetchRaw(url, { headers: { Accept: "application/json" }, signal }, label);
   if (!raw.ok) {
     return raw;
   }
@@ -498,7 +519,7 @@ async function probeWorker() {
 // a deliberately different failure mode from a per-call revert, since the
 // honeypot check needs to tell "the Worker is down" (Unknown) apart from
 // "this specific call reverted" (a real, informative result).
-async function callWorkerBatch(calls, label) {
+async function callWorkerBatch(calls, label, signal) {
   const requests = calls.map((call, i) => ({
     jsonrpc: "2.0",
     id: i + 1,
@@ -515,6 +536,7 @@ async function callWorkerBatch(calls, label) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requests.length === 1 ? requests[0] : requests),
+      signal,
     },
     label || `${WORKER_SOURCE} — eth_call batch`,
   );
@@ -582,18 +604,18 @@ async function callWorkerBatch(calls, label) {
 // extra retry of that same batch here before giving up. This is what
 // keeps a normal scan (owner lookup, sell-simulation) from failing
 // outright over what's usually a brief, temporary rate limit.
-async function callWorkerChunked(calls, label) {
+async function callWorkerChunked(calls, label, signal) {
   const allResults = [];
   const diagnostics = [];
   for (let i = 0; i < calls.length; i += WORKER_MAX_BATCH_SIZE) {
     if (i > 0) {
-      await sleep(CHUNK_DELAY_MS);
+      await sleep(CHUNK_DELAY_MS, signal);
     }
     const chunk = calls.slice(i, i + WORKER_MAX_BATCH_SIZE);
-    let outcome = await callWorkerBatch(chunk, label);
+    let outcome = await callWorkerBatch(chunk, label, signal);
     if (!outcome.ok && outcome.diagnostic.kind === "upstream-rate-limited") {
-      await sleep(RATE_LIMIT_RETRY_DELAY_MS);
-      outcome = await callWorkerBatch(chunk, label);
+      await sleep(RATE_LIMIT_RETRY_DELAY_MS, signal);
+      outcome = await callWorkerBatch(chunk, label, signal);
     }
     diagnostics.push(outcome.diagnostic);
     if (!outcome.ok) {
@@ -611,8 +633,8 @@ async function callWorkerChunked(calls, label) {
 // diagnostics for the "Owner unknown" finding's Technical details panel,
 // so "the Worker is down" and "this contract has no owner()" both keep
 // their real underlying error instead of collapsing into a bare "Unknown".
-async function fetchOwnerViaWorker(tokenAddress) {
-  const outcome = await callWorkerChunked([{ to: tokenAddress, data: SELECTOR.owner }], `${WORKER_SOURCE} — eth_call owner()`);
+async function fetchOwnerViaWorker(tokenAddress, signal) {
+  const outcome = await callWorkerChunked([{ to: tokenAddress, data: SELECTOR.owner }], `${WORKER_SOURCE} — eth_call owner()`, signal);
   if (!outcome.ok) return { owner: null, diagnostics: outcome.diagnostics };
   const result = outcome.results[0];
   if (!result.ok) return { owner: null, diagnostics: [result.diagnostic] };
@@ -633,7 +655,7 @@ async function fetchOwnerViaWorker(tokenAddress) {
 // to 2 plain-wallet top holders (capped down from 3, same reason) to (a)
 // a fixed probe address and (b) each detected pool, to see whether
 // "selling" looks blocked.
-async function runSellSimulation(tokenAddress, holders) {
+async function runSellSimulation(tokenAddress, holders, signal) {
   const top5 = Array.isArray(holders) ? holders.slice(0, 5) : [];
   const contractHolders = top5.filter((h) => h.isContract === true);
 
@@ -646,7 +668,7 @@ async function runSellSimulation(tokenAddress, holders) {
     { to: h.address, data: SELECTOR.token1 },
   ]);
 
-  const poolOutcome = await callWorkerChunked(poolCalls, `${WORKER_SOURCE} — eth_call token0()/token1() (pool detection)`);
+  const poolOutcome = await callWorkerChunked(poolCalls, `${WORKER_SOURCE} — eth_call token0()/token1() (pool detection)`, signal);
   if (!poolOutcome.ok) {
     return { status: "unreachable", pools: [], holderAttempts: [], diagnostics: poolOutcome.diagnostics };
   }
@@ -707,9 +729,9 @@ async function runSellSimulation(tokenAddress, holders) {
   // (above) and this are two separate callWorkerChunked calls run back
   // to back, so without this the delay CHUNK_DELAY_MS adds *within* each
   // one wouldn't do anything to space out the seam between them.
-  await sleep(CHUNK_DELAY_MS);
+  await sleep(CHUNK_DELAY_MS, signal);
 
-  const simOutcome = await callWorkerChunked(simulationCalls, `${WORKER_SOURCE} — eth_call transfer() simulation`);
+  const simOutcome = await callWorkerChunked(simulationCalls, `${WORKER_SOURCE} — eth_call transfer() simulation`, signal);
   if (!simOutcome.ok) {
     return { status: "unreachable", pools, holderAttempts: [], diagnostics: simOutcome.diagnostics };
   }
@@ -1068,6 +1090,7 @@ const tokenAddressInput = document.getElementById("token-address");
 const addressErrorEl = document.getElementById("address-error");
 const scanButton = document.getElementById("scan-button");
 const scanButtonLabelEl = document.getElementById("scan-button-label");
+const cancelScanButton = document.getElementById("cancel-scan-button");
 const rescanButton = document.getElementById("rescan-button");
 const rescanButtonLabelEl = document.getElementById("rescan-button-label");
 const scanErrorEl = document.getElementById("scan-error");
@@ -1130,6 +1153,7 @@ function setScanBusy(isBusy) {
   setHistoryChipsDisabled(isBusy);
   scanButtonLabelEl.textContent = isBusy ? "Scanning…" : "Scan";
   rescanButtonLabelEl.textContent = isBusy ? "Scanning…" : "Rescan";
+  cancelScanButton.hidden = !isBusy;
 }
 
 // A short cooldown after every scan that reached the network — result or
@@ -1790,7 +1814,17 @@ function resolvePendingFinding(id, finding, sellSimulation) {
 // still belongs to the current scan before touching the DOM.
 let currentScanId = 0;
 
+// The scan in flight, if any: its AbortController (aborts every Blockscout
+// and Worker request it started, and cuts short its pending delays — see
+// sleep and fetchRaw), its debug timer, and what to put back if it's
+// cancelled. Cleared when the scan finishes or is cancelled.
+let activeScan = null;
+
 async function scanToken(rawAddress) {
+  // Buttons are disabled while a scan runs, so this is only a safety net:
+  // a scan that's been superseded stops its requests too.
+  activeScan?.controller.abort();
+  activeScan = null;
   const scanId = ++currentScanId;
   const isCurrentScan = () => scanId === currentScanId;
   resetScanUI();
@@ -1806,6 +1840,10 @@ async function scanToken(rawAddress) {
   }
 
   const address = getAddress(trimmed);
+  const controller = new AbortController();
+  const { signal } = controller;
+  const previousScannedAddress = lastScannedTokenAddress;
+  const exampleWasVisible = Boolean(scanExampleEl && !scanExampleEl.hidden);
   // Remembered so "Test Worker connection" (in the Network status card)
   // can run its eth_call self-test against a real, already-scanned
   // contract instead of guessing at one — see testWorkerConnection below.
@@ -1817,6 +1855,7 @@ async function scanToken(rawAddress) {
 
   setScanBusy(true);
   const timer = createScanTimer(address);
+  activeScan = { controller, timer, previousScannedAddress, exampleWasVisible };
 
   try {
     // Every Blockscout call starts as early as its own inputs allow: the
@@ -1828,19 +1867,19 @@ async function scanToken(rawAddress) {
     // every failure comes back as a result with a diagnostic.
     const addressPromise = timer.time(
       "Blockscout /addresses/{address}",
-      fetchBlockscout(`/addresses/${address}`, `${BLOCKSCOUT_SOURCE} — GET /addresses/{address}`),
+      fetchBlockscout(`/addresses/${address}`, `${BLOCKSCOUT_SOURCE} — GET /addresses/{address}`, signal),
     );
     const tokenPromise = timer.time(
       "Blockscout /tokens/{address}",
-      fetchBlockscout(`/tokens/${address}`, `${BLOCKSCOUT_SOURCE} — GET /tokens/{address}`),
+      fetchBlockscout(`/tokens/${address}`, `${BLOCKSCOUT_SOURCE} — GET /tokens/{address}`, signal),
     );
     const contractPromise = timer.time(
       "Blockscout /smart-contracts/{address}",
-      fetchBlockscout(`/smart-contracts/${address}`, `${BLOCKSCOUT_SOURCE} — GET /smart-contracts/{address}`),
+      fetchBlockscout(`/smart-contracts/${address}`, `${BLOCKSCOUT_SOURCE} — GET /smart-contracts/{address}`, signal),
     );
     const holdersPromise = timer.time(
       "Blockscout /tokens/{address}/holders",
-      fetchBlockscout(`/tokens/${address}/holders`, `${BLOCKSCOUT_SOURCE} — GET /tokens/{address}/holders`),
+      fetchBlockscout(`/tokens/${address}/holders`, `${BLOCKSCOUT_SOURCE} — GET /tokens/{address}/holders`, signal),
     );
 
     // The creation transaction's timestamp (for token age) needs the
@@ -1852,7 +1891,7 @@ async function scanToken(rawAddress) {
       return creationTxHash
         ? timer.time(
             "Blockscout /transactions/{hash} (after /addresses)",
-            fetchBlockscout(`/transactions/${creationTxHash}`, `${BLOCKSCOUT_SOURCE} — GET /transactions/{hash}`),
+            fetchBlockscout(`/transactions/${creationTxHash}`, `${BLOCKSCOUT_SOURCE} — GET /transactions/{hash}`, signal),
           )
         : null;
     });
@@ -1869,7 +1908,7 @@ async function scanToken(rawAddress) {
       return admin
         ? timer.time(
             "Blockscout /addresses/{proxy_admin} (after /smart-contracts)",
-            fetchBlockscout(`/addresses/${admin}`, `${BLOCKSCOUT_SOURCE} — GET /addresses/{proxy_admin}`),
+            fetchBlockscout(`/addresses/${admin}`, `${BLOCKSCOUT_SOURCE} — GET /addresses/{proxy_admin}`, signal),
           )
         : null;
     });
@@ -1994,8 +2033,9 @@ async function scanToken(rawAddress) {
       timer.time(
         "Worker owner() check",
         withWholeCheckRateLimitRetry(
-          () => fetchOwnerViaWorker(address),
+          () => fetchOwnerViaWorker(address, signal),
           (r) => r.owner === null && hasRateLimitedDiagnostic(r.diagnostics),
+          signal,
         ),
       ),
     );
@@ -2172,14 +2212,16 @@ async function scanToken(rawAddress) {
     resultOwnerEl.textContent = owner ? `${owner} (via ${WORKER_SOURCE})` : UNAVAILABLE;
     resultSourceEl.textContent = owner ? `${BLOCKSCOUT_SOURCE} + ${WORKER_SOURCE} (secondary, owner)` : BLOCKSCOUT_SOURCE;
 
-    await sleep(CHUNK_DELAY_MS);
+    await sleep(CHUNK_DELAY_MS, signal);
+    if (!isCurrentScan()) return;
 
     const sellSimulation = await enqueueWorkerJob(() =>
       timer.time(
         "Worker sell simulation",
         withWholeCheckRateLimitRetry(
-          () => runSellSimulation(address, holders),
+          () => runSellSimulation(address, holders, signal),
           (r) => r.status === "unreachable" && hasRateLimitedDiagnostic(r.diagnostics),
+          signal,
         ),
       ),
     );
@@ -2213,6 +2255,12 @@ async function scanToken(rawAddress) {
     // A newer scan has taken over (its own setScanBusy/URL handling
     // applies) — leave both alone so this one can't un-busy it.
     if (isCurrentScan()) {
+      activeScan = null;
+      // Nothing left to cancel. A keyboard user who had focus on Cancel
+      // gets it back on the field instead of losing it to <body>.
+      const cancelHadKeyboardFocus = cancelScanButton.matches(":focus-visible");
+      cancelScanButton.hidden = true;
+      if (cancelHadKeyboardFocus) tokenAddressInput.focus();
       // Buttons stay disabled through the cooldown; it re-enables them.
       startScanCooldown();
       timer.report();
@@ -2222,6 +2270,29 @@ async function scanToken(rawAddress) {
       updateShareableUrl(address);
     }
   }
+}
+
+// Stops the scan in flight and puts the page back as it was before it
+// started: every request aborted, every pending delay/retry cut short, no
+// partial result or "Checking…" row left behind, the example card back if
+// it was showing — only the typed address stays in the field. Bumping
+// currentScanId makes every callback the cancelled scan still has queued
+// see it's stale, so none of them touches the DOM, starts the cooldown or
+// rewrites the URL. No cooldown: nothing was completed.
+function cancelScan() {
+  const scan = activeScan;
+  if (!scan) return;
+  activeScan = null;
+  currentScanId += 1;
+  scan.controller.abort();
+  scan.timer.mark("Cancelled");
+  scan.timer.report();
+  lastScannedTokenAddress = scan.previousScannedAddress;
+  resetScanUI();
+  if (scanExampleEl && scan.exampleWasVisible) scanExampleEl.hidden = false;
+  setScanBusy(false);
+  // Cancel has just hidden itself; Scan is the natural next step.
+  scanButton.focus();
 }
 
 // --- Shareable scan links -------------------------------------------------
@@ -2342,6 +2413,10 @@ rescanButton.addEventListener("click", () => {
   }
 });
 
+cancelScanButton.addEventListener("click", () => {
+  cancelScan();
+});
+
 copyLinkButton.addEventListener("click", () => {
   shareScanLink();
 });
@@ -2363,9 +2438,42 @@ getDebugPanel();
 
 renderScanHistory();
 
-// A shared scan link (?address=0x…) reproduces its scan immediately.
+// A shared scan link (?address=0x…) reproduces its scan immediately — but
+// only the first time this tab loads it. The page rewrites its own URL to
+// ?address= after every scan, so without this every refresh of the same tab
+// would re-run the same scan against the shared Blockscout/Worker
+// resources for no new reason. The record lives in sessionStorage: it's
+// per tab and gone when the tab closes, so a shared link opened in a new
+// tab (or after a browser restart) still scans straight away. Tapping
+// Scan/Rescan always scans; this only governs the automatic one. If
+// storage is unavailable (private browsing, blocked), every load
+// auto-scans, as before.
+const AUTO_SCANNED_KEY = "conge:auto-scanned";
+
+function readAutoScanned() {
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(AUTO_SCANNED_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed.filter((a) => typeof a === "string") : [];
+  } catch {
+    return null;
+  }
+}
+
+function markAutoScanned(list, address) {
+  try {
+    window.sessionStorage.setItem(AUTO_SCANNED_KEY, JSON.stringify([...list, address]));
+  } catch {
+    // Storage unavailable — the next load just auto-scans again.
+  }
+}
+
 const sharedAddress = addressFromUrl();
 if (sharedAddress) {
   tokenAddressInput.value = sharedAddress;
-  scanToken(sharedAddress);
+  const autoScanned = readAutoScanned();
+  const key = sharedAddress.toLowerCase();
+  if (!autoScanned?.includes(key)) {
+    if (autoScanned) markAutoScanned(autoScanned, key);
+    scanToken(sharedAddress);
+  }
 }
