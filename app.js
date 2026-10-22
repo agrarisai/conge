@@ -1088,6 +1088,7 @@ workerTestButton.addEventListener("click", () => {
 const scanForm = document.getElementById("scan-form");
 const tokenAddressInput = document.getElementById("token-address");
 const addressErrorEl = document.getElementById("address-error");
+const clearAddressButton = document.getElementById("clear-address-button");
 const scanButton = document.getElementById("scan-button");
 const scanButtonLabelEl = document.getElementById("scan-button-label");
 const cancelScanButton = document.getElementById("cancel-scan-button");
@@ -1330,8 +1331,16 @@ function groupKeyFor(finding) {
   return finding.severity === "info" ? "passed" : finding.severity;
 }
 
-function resetScanUI() {
+// The address field's validation state: the message under it and its
+// invalid border (aria-invalid, which screen readers announce too).
+function clearAddressError() {
   addressErrorEl.hidden = true;
+  addressErrorEl.textContent = "";
+  tokenAddressInput.removeAttribute("aria-invalid");
+}
+
+function resetScanUI() {
+  clearAddressError();
   scanErrorEl.hidden = true;
   scanResultEl.hidden = true;
   scanTechDetailsEl.hidden = true;
@@ -1834,6 +1843,7 @@ async function scanToken(rawAddress) {
   if (!isAddress(trimmed)) {
     addressErrorEl.textContent = "Enter a valid EVM address (0x followed by 40 hex characters).";
     addressErrorEl.hidden = false;
+    tokenAddressInput.setAttribute("aria-invalid", "true");
     // Never leave the URL pointing at a previous, different token.
     updateShareableUrl(null);
     return;
@@ -2415,6 +2425,15 @@ rescanButton.addEventListener("click", () => {
 
 cancelScanButton.addEventListener("click", () => {
   cancelScan();
+});
+
+// Empties the field and puts it back to its untouched state: no error
+// message, no invalid border. Doesn't touch a scan in flight (it already
+// has its address) or anything else on the page.
+clearAddressButton.addEventListener("click", () => {
+  tokenAddressInput.value = "";
+  clearAddressError();
+  tokenAddressInput.focus();
 });
 
 copyLinkButton.addEventListener("click", () => {

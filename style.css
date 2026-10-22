@@ -1030,6 +1030,85 @@ input[type="text"]:focus-visible {
   box-shadow: 0 0 0 5px rgb(11 132 243 / 12%);
 }
 
+/* Invalid address (after a Scan with bad input): the field's border
+   takes the error message's own rose text colour (7.3:1 on ivory — a
+   field boundary needs 3:1). Focus still wins, so typing a fix reads as
+   the normal focused field. Cleared by the clear button or the next scan. */
+input[type="text"][aria-invalid="true"]:not(:focus-visible) {
+  border-color: var(--tone-rose-text);
+}
+
+/* Clear ("x") button inside the address field, right-aligned. Its 44px
+   tap area is always reserved by the input's right padding, so the text
+   never shifts when it appears; it's only shown while there's text (the
+   placeholder is showing exactly when the field is empty, however the
+   value got there). visibility, not display, so it also leaves the Tab
+   order while hidden. The icon is a 16px, 1.5px-stroke line "x" — the
+   same weight as the finding icons. */
+.input-wrap {
+  position: relative;
+}
+
+.input-wrap input[type="text"] {
+  width: 100%;
+  padding-right: 2.75rem;
+}
+
+.input-clear {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-slate);
+  cursor: pointer;
+  transform: translateY(-50%);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.input-clear svg {
+  width: 16px;
+  height: 16px;
+  padding: 4px;
+  box-sizing: content-box;
+  border-radius: 999px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.input-clear:hover {
+  color: var(--color-ink);
+}
+
+.input-clear:hover svg {
+  background-color: var(--tone-neutral-bg);
+}
+
+.input-clear:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -6px;
+}
+
+.input-wrap input:placeholder-shown + .input-clear {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .input-clear svg {
+    transition: none;
+  }
+}
+
 /* Full-strength slate (5.8:1 on the input's ivory), not a faded one: at
    70% opacity it measured 2.98:1, under AA. opacity: 1 is explicit
    because Firefox otherwise applies its own default placeholder opacity. */

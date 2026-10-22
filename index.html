@@ -31,7 +31,7 @@
     rel="stylesheet"
   />
 
-  <link rel="stylesheet" href="style.css?v=55728748c6" />
+  <link rel="stylesheet" href="style.css?v=5d935fe1ea" />
 </head>
 <body class="page-scanner">
   <!-- Welcome splash. Shown once per tab session, before the scanner:
@@ -229,16 +229,25 @@
       <form id="scan-form" novalidate>
         <div class="field">
           <label for="token-address">Contract address</label>
-          <input
-            id="token-address"
-            name="token-address"
-            type="text"
-            inputmode="text"
-            autocomplete="off"
-            spellcheck="false"
-            placeholder="0x…"
-            required
-          />
+          <!-- The clear button shows only while the field has text (CSS,
+               via :placeholder-shown — so it also follows values set by the
+               example button, history chips or a ?address= link). -->
+          <div class="input-wrap">
+            <input
+              id="token-address"
+              name="token-address"
+              type="text"
+              inputmode="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="0x…"
+              aria-describedby="address-error"
+              required
+            />
+            <button type="button" class="input-clear" id="clear-address-button" aria-label="Clear">
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"></path></svg>
+            </button>
+          </div>
           <button id="example-scan-button" type="button" class="text-button">Try an example (USDG)</button>
         </div>
         <p id="address-error" class="error-message" hidden></p>
@@ -485,6 +494,6 @@
   </script>
   <script src="nav.js?v=b981a0accb" defer></script>
   <script src="scroll-fx.js?v=67bfb40a43" defer></script>
-  <script type="module" src="app.js?v=8393abdbf6"></script>
+  <script type="module" src="app.js?v=e53b221606"></script>
 </body>
 </html>
