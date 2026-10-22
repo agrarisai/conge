@@ -2467,7 +2467,7 @@ function markAutoScanned(list, address) {
   }
 }
 
-// A first-time visitor sees the welcome splash first (see the inline
+// A new tab sees the welcome splash first (see the inline
 // script in index.html): the auto-scan waits until it's dismissed, so the
 // result isn't built behind it — and isn't recorded as auto-scanned until
 // it actually runs.
