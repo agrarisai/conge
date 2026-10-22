@@ -2467,13 +2467,27 @@ function markAutoScanned(list, address) {
   }
 }
 
+// A first-time visitor sees the welcome splash first (see the inline
+// script in index.html): the auto-scan waits until it's dismissed, so the
+// result isn't built behind it — and isn't recorded as auto-scanned until
+// it actually runs.
+function afterSplash(run) {
+  if (document.documentElement.classList.contains("splash-active")) {
+    document.addEventListener("conge:splash-dismissed", run, { once: true });
+  } else {
+    run();
+  }
+}
+
 const sharedAddress = addressFromUrl();
 if (sharedAddress) {
   tokenAddressInput.value = sharedAddress;
-  const autoScanned = readAutoScanned();
-  const key = sharedAddress.toLowerCase();
-  if (!autoScanned?.includes(key)) {
-    if (autoScanned) markAutoScanned(autoScanned, key);
-    scanToken(sharedAddress);
-  }
+  afterSplash(() => {
+    const autoScanned = readAutoScanned();
+    const key = sharedAddress.toLowerCase();
+    if (!autoScanned?.includes(key)) {
+      if (autoScanned) markAutoScanned(autoScanned, key);
+      scanToken(sharedAddress);
+    }
+  });
 }

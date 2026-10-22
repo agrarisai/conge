@@ -109,6 +109,23 @@ headers for this site's origin.
   disabled together for the whole scan (not just its first stage), since
   the owner/sell-simulation rate-limit spacing above assumes only one
   scan runs at a time.
+- **First-visit welcome splash** — the very first time a browser opens
+  the scanner, a full-screen welcome comes first: the logo with halo rings
+  pulsing out of its radar dot and a dashed signal line sweeping out of
+  its own dashes, over soft drifting blue light, a one-line headline, what
+  Conge does, and a single **Get started** button. It's focused on show,
+  and the page behind is `inert` until it's dismissed. Dismissing it
+  fades it out and stores `conge:splashSeen` in `localStorage`, so it
+  never shows again in that browser. If storage is blocked, the splash is
+  skipped rather than shown on every visit. Under reduced motion
+  everything rests in place. The show/dismiss logic is an inline script
+  right after the splash markup in `index.html`, so the button works even
+  if a script file fails to load, and the decision is made before the
+  rest of the page is parsed, so nothing flashes. A shared `?address=`
+  link opened on a first visit shows the splash first; app.js waits for
+  its `conge:splash-dismissed` event before the auto-scan runs. **To see
+  it again:** in DevTools, run `localStorage.removeItem("conge:splashSeen")`
+  and reload.
 - **Cancel a scan** — while a scan is in flight, a **Cancel** button sits
   next to Scan. It aborts every request that scan started, both
   Blockscout and Worker (one `AbortController` per scan, passed down to
@@ -436,10 +453,12 @@ either. It's built entirely with plain CSS custom properties in
 - **Type** — headings in **Space Grotesk** (the same face used in the
   wordmark), body text in **Inter**, and anything that's data — addresses,
   amounts, the whole token-details table, every Technical details code
-  block — in **JetBrains Mono**. Only these three families; no arbitrary
-  extras. Sizes step through a small, intentional set of `rem` values
-  rather than one-off pixel numbers, and there's exactly one tracked-out
-  uppercase label on the whole site (the "TOKEN RISK SCANNER" tagline) —
+  block — in **JetBrains Mono**. The one exception is the first-visit
+  welcome splash's headline, set in **Source Serif 4** (fallback Georgia),
+  loaded on `index.html` only. No other extras. Sizes step through a
+  small, intentional set of `rem` values rather than one-off pixel
+  numbers, and tracked-out uppercase mono labels are kept to the
+  "TOKEN RISK SCANNER" tagline and the splash's matching eyebrow line —
   deliberately not a pattern repeated for section headings or group
   labels, which stay sentence case.
 - **Layout** — mobile-first (this is mostly opened on a phone): the

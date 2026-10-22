@@ -2091,3 +2091,260 @@ input[type="text"]::placeholder {
     margin-bottom: 0;
   }
 }
+
+/* --- First-visit welcome splash ---------------------------------------
+   Full-screen, shown once per browser before the scanner (index.html's
+   inline script decides; see the comment there). One orchestrated moment
+   of motion: the logo breathing with halo rings pulsing out from its
+   radar dot, a dashed signal line sweeping out of the logo's own dashes,
+   and soft blue light drifting behind — nothing else on the splash moves.
+   Every colour is an existing token: ivory background, the logo's blue →
+   cyan, ink/slate text. Under reduced motion it all rests in place. */
+
+html.splash-active {
+  overflow: hidden;
+}
+
+main:focus {
+  outline: none;
+}
+
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  isolation: isolate;
+  display: grid;
+  place-items: center;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding:
+    max(2rem, env(safe-area-inset-top, 0px))
+    max(1.25rem, env(safe-area-inset-right, 0px))
+    max(2rem, env(safe-area-inset-bottom, 0px))
+    max(1.25rem, env(safe-area-inset-left, 0px));
+  background-color: var(--color-bg);
+  transition: opacity 0.45s ease;
+}
+
+.splash[hidden] {
+  display: none;
+}
+
+.splash.is-leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Soft blue light, blurred and multiplied into the ivory, each blob
+   drifting on its own slow loop in its own direction. */
+.splash-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.splash-blob {
+  position: absolute;
+  width: 70vmax;
+  height: 70vmax;
+  border-radius: 50%;
+  filter: blur(40px);
+  mix-blend-mode: multiply;
+  opacity: 0.16;
+}
+
+.splash-blob-1 {
+  top: -38vmax;
+  left: -22vmax;
+  background: radial-gradient(circle, var(--color-accent) 0%, transparent 65%);
+  animation: splash-drift-1 26s ease-in-out infinite alternate;
+}
+
+.splash-blob-2 {
+  top: -12vmax;
+  right: -36vmax;
+  background: radial-gradient(circle, var(--color-accent-secondary) 0%, transparent 65%);
+  opacity: 0.2;
+  animation: splash-drift-2 30s ease-in-out infinite alternate;
+}
+
+.splash-blob-3 {
+  bottom: -46vmax;
+  left: 4vmax;
+  background: radial-gradient(circle, var(--color-accent-text) 0%, transparent 65%);
+  opacity: 0.11;
+  animation: splash-drift-3 22s ease-in-out infinite alternate;
+}
+
+@keyframes splash-drift-1 {
+  to { transform: translate(9vw, 7vh) scale(1.08); }
+}
+
+@keyframes splash-drift-2 {
+  to { transform: translate(-11vw, 9vh) scale(0.94); }
+}
+
+@keyframes splash-drift-3 {
+  to { transform: translate(7vw, -8vh) scale(1.06); }
+}
+
+.splash-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 34rem;
+  text-align: center;
+}
+
+.splash-banner {
+  position: relative;
+  margin-bottom: 2.25rem;
+}
+
+/* A faint dot grid around the mark, fading out from it. */
+.splash-grid {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 640px;
+  height: 460px;
+  transform: translate(-50%, -50%);
+  background-image: radial-gradient(circle, rgb(15 17 21 / 15%) 1px, transparent 1.5px);
+  background-size: 18px 18px;
+  background-position: center;
+  -webkit-mask-image: radial-gradient(closest-side, #000 0%, rgb(0 0 0 / 45%) 40%, transparent 100%);
+  mask-image: radial-gradient(closest-side, #000 0%, rgb(0 0 0 / 45%) 40%, transparent 100%);
+  pointer-events: none;
+}
+
+/* Positions below are fractions of the logo image itself: its radar dot
+   sits at 43.2% / 50.2%, its outermost ring spans 38% of its width, and
+   its own dashed line ends at 97%. */
+.splash-mark {
+  position: relative;
+  width: clamp(92px, 26vw, 124px);
+}
+
+.splash-logo {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: auto;
+  transform-origin: 43.2% 50.2%;
+  animation: splash-breathe 5.2s ease-in-out infinite;
+}
+
+@keyframes splash-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.035); }
+}
+
+.splash-halo {
+  position: absolute;
+  left: 43.2%;
+  top: 50.2%;
+  width: 38%;
+  aspect-ratio: 1;
+  border: 1.5px solid var(--color-accent);
+  border-radius: 50%;
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(1);
+  animation: splash-halo 3.4s ease-out infinite;
+}
+
+.splash-halo:nth-child(2) { animation-delay: 1.1s; }
+.splash-halo:nth-child(3) { animation-delay: 2.2s; }
+
+@keyframes splash-halo {
+  0% { transform: translate(-50%, -50%) scale(1); opacity: 0.4; }
+  100% { transform: translate(-50%, -50%) scale(3.3); opacity: 0; }
+}
+
+/* The logo's own dashes, carried on out to the right: same rounded caps
+   and rhythm as its dashed line (and the findings' marker dashes), in the
+   cyan its gradient ends on, fading out as it goes. */
+.splash-signal {
+  position: absolute;
+  left: 97%;
+  top: 50.2%;
+  width: clamp(64px, 22vw, 150px);
+  height: 10px;
+  overflow: visible;
+  transform: translateY(-50%);
+  stroke: var(--color-accent-secondary);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-dasharray: 3.4 5.8;
+  -webkit-mask-image: linear-gradient(to right, #000 25%, transparent);
+  mask-image: linear-gradient(to right, #000 25%, transparent);
+  animation: splash-signal 1.8s linear infinite;
+}
+
+@keyframes splash-signal {
+  to { stroke-dashoffset: -9.2; }
+}
+
+.splash-eyebrow {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-accent-text);
+}
+
+.splash-title {
+  margin: 0.75rem 0 0.9rem;
+  font-family: "Source Serif 4", Georgia, serif;
+  font-weight: 600;
+  font-size: clamp(2rem, 8.5vw, 3.1rem);
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+  color: var(--color-ink);
+  text-wrap: balance;
+}
+
+.splash-text {
+  margin: 0;
+  max-width: 30rem;
+  font-family: var(--font-body);
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--color-slate);
+  text-wrap: pretty;
+}
+
+.splash-cta {
+  margin-top: 1.9rem;
+  padding: 0.85rem 1.9rem;
+  font-size: 1rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .splash {
+    transition: none;
+  }
+
+  .splash-blob,
+  .splash-logo,
+  .splash-halo,
+  .splash-signal {
+    animation: none;
+  }
+
+  /* At rest: two rings standing out from the radar dot, one fainter. */
+  .splash-halo:nth-child(1) {
+    opacity: 0.28;
+    transform: translate(-50%, -50%) scale(1.7);
+  }
+
+  .splash-halo:nth-child(2) {
+    opacity: 0.13;
+    transform: translate(-50%, -50%) scale(2.5);
+  }
+}
