@@ -121,6 +121,26 @@ headers for this site's origin.
   [Design](#design)) when both are known, falling back to whichever one
   is available, or "Token" if neither is.
 
+- **Example result** — below the scan card on first load, a static
+  "What a scan looks like" card (labelled **EXAMPLE**, with a note that
+  it's sample data for a made-up token, **Quillfern / QFRN**) shows a
+  Medium result with one concern and two passed checks. It's built from
+  the real result-card markup (gauge, signal list, severity colours) but
+  has no ids, buttons or interactive parts, and screen-reader-only
+  "Example" prefixes on its title and risk level. It's hidden as soon as a
+  real scan starts.
+- **Recent scans (this device only)** — after a scan finishes (a final
+  risk level, or a clear "wallet" / "not a standard token" answer; never
+  for input that failed validation), the address, name/symbol and level
+  are saved in this browser's `localStorage` (`conge:scan-history`),
+  newest first, capped at 5. They show as chips under the scan form, each
+  with a severity-coloured dot; tapping one re-runs that scan. Nothing is
+  shown until there's at least one entry, and a line under the chips says
+  the history stays in this browser and is never sent anywhere. All
+  storage access is wrapped in try/catch: with storage blocked (e.g.
+  private browsing) the page still works and the chips last for the
+  current visit only.
+
 ## Risk Score v1
 
 Every scan of an address that turns out to be a contract runs eight
