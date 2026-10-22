@@ -1666,9 +1666,15 @@ input[type="text"]::placeholder {
   stroke-linejoin: round;
 }
 
+/* Titles and details can carry a full 42-character address ("Owned by
+   0x…") or another unbroken value; with no spaces to break at, it would
+   run past the card's edge on a phone. overflow-wrap: anywhere lets it
+   break mid-string only when nothing else fits, so ordinary words still
+   wrap normally. */
 .finding-body {
   min-width: 0;
   flex: 1;
+  overflow-wrap: anywhere;
 }
 
 .risk-finding-title {
