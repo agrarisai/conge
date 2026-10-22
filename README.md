@@ -109,6 +109,22 @@ headers for this site's origin.
   disabled together for the whole scan (not just its first stage), since
   the owner/sell-simulation rate-limit spacing above assumes only one
   scan runs at a time.
+- **Cancel a scan** — while a scan is in flight, a **Cancel** button sits
+  next to Scan. It aborts every request that scan started, both
+  Blockscout and Worker (one `AbortController` per scan, passed down to
+  every `fetch`), and cuts short its pending spacing/retry delays, so
+  nothing keeps running in the background. The page goes back to how it
+  was before the scan: no partial result, no "Checking…" rows, the example
+  card back if it was showing. Only the typed address stays. A cancelled
+  scan doesn't start the cooldown, so Scan works again straight away.
+- **Shared links scan once per tab** — opening a `?address=0x…` link
+  scans it straight away, but only the first time that tab loads it. The
+  page keeps `?address=` in its URL after every scan, so without this
+  every refresh would re-run the same scan. Which addresses this tab has
+  already auto-scanned is kept in `sessionStorage` (per tab, gone when the
+  tab closes), so a shared link opened in a new tab still scans
+  immediately. On a refresh the address is just filled in, ready to scan.
+  If storage is unavailable, every load auto-scans, as before.
 - **Risk Score v1** — every scan of a contract also runs a transparent,
   rule-based risk check (see below) and shows a summary card — the
   overall level as the gauge described in [Design](#design) with a
@@ -786,7 +802,8 @@ code.
   small dark debug panel is pinned to the bottom of the screen and fills
   in live as each stage finishes. Tap its header to collapse or expand it.
   No console needed. The flag survives scans and "Copy link", so
-  `…/?address=0x…&debug=timing` reproduces a scan with timing in one tap.
+  `…/?address=0x…&debug=timing` reproduces a scan with timing in one tap
+  (the first time a tab opens it; on a refresh, tap Scan).
 - **On desktop:** the same data is also printed as a `console.table` in
   the browser console.
 
@@ -1208,7 +1225,11 @@ site keep any single visitor or script from overusing it:
 - **Shared `/health` check:** `/health` shares one upstream check for 15
   seconds.
 - **Scan cooldown:** after every scan, the Scan and Rescan buttons stay
-  disabled for 3 seconds with a visible "Scan again in 3s" countdown.
+  disabled for 3 seconds with a visible "Scan again in 3s" countdown. A
+  cancelled scan has already stopped all its requests, so it doesn't
+  start one.
+- **No auto-rescan on refresh:** a `?address=` link auto-scans only the
+  first time a tab loads it (see Features).
 - **Per-IP rate limiting:** set as a Cloudflare Rate Limiting Rule, which
   is a manual dashboard step.
 
