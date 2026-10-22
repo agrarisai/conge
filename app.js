@@ -1431,6 +1431,44 @@ function buildSellSimulationEvidence(simulation) {
 // APIs directly rather than an HTML template string.
 const SVG_NS = "http://www.w3.org/2000/svg";
 
+// Small line icons for each check type (16×16, stroked, no fill — see
+// .finding-icon in style.css), shown between a finding's severity marker
+// and its text. Purely decorative (aria-hidden): the finding's title
+// already says what it is. Keyed by finding id (scoring.js) / pending-row
+// id, so every row of a given check gets the same icon. The static example
+// card in index.html uses identical copies of these.
+const FINDING_ICONS = {"shield":[["path",{"d":"M8 1.75 13.25 3.6v3.9c0 3.05-2.2 5.45-5.25 6.75C4.95 12.95 2.75 10.55 2.75 7.5V3.6Z"}],["path",{"d":"m5.75 7.9 1.6 1.6 2.9-3.05"}]],"pie":[["circle",{"cx":"8","cy":"8","r":"5.75"}],["path",{"d":"M8 2.25V8h5.75"}]],"people":[["circle",{"cx":"6","cy":"5.5","r":"2.25"}],["path",{"d":"M2 13.25c0-2.35 1.8-3.75 4-3.75s4 1.4 4 3.75"}],["circle",{"cx":"11.25","cy":"6","r":"1.75"}],["path",{"d":"M10.6 9.6c.2-.05.45-.1.65-.1 1.6 0 2.75 1.2 2.75 3.1"}]],"clock":[["circle",{"cx":"8","cy":"8","r":"5.75"}],["path",{"d":"M8 4.75V8l2.25 1.4"}]],"layers":[["path",{"d":"M8 2.25 13.75 5.1 8 7.95 2.25 5.1Z"}],["path",{"d":"m2.25 8 5.75 2.85L13.75 8"}],["path",{"d":"m2.25 10.9 5.75 2.85 5.75-2.85"}]],"key":[["circle",{"cx":"5.5","cy":"10.5","r":"2.75"}],["path",{"d":"m7.5 8.5 5.75-5.75"}],["path",{"d":"m11.25 4.75 1.5 1.5"}],["path",{"d":"m9.75 6.25 1.25 1.25"}]],"person":[["circle",{"cx":"8","cy":"5.25","r":"2.5"}],["path",{"d":"M3.25 13.5c0-2.7 2.1-4.4 4.75-4.4s4.75 1.7 4.75 4.4"}]],"exchange":[["path",{"d":"M2.75 5.5h10"}],["path",{"d":"M10.5 3.25 12.75 5.5 10.5 7.75"}],["path",{"d":"M13.25 10.5h-10"}],["path",{"d":"M5.5 8.25 3.25 10.5l2.25 2.25"}]],"chart":[["path",{"d":"M2.5 13.25h11"}],["path",{"d":"m3.25 10.25 3-3 2.5 2 4.25-4.75"}]]};
+
+function findingIconKey(id) {
+  if (!id) return null;
+  if (id === "verification") return "shield";
+  if (id === "holder-top1" || id === "holder-top10" || id === "holder-concentration") return "pie";
+  if (id === "holder-count") return "people";
+  if (id === "token-age") return "clock";
+  if (id === "owner-privilege-proxyUpgrade") return "layers";
+  if (id === "owner-privileges" || id.startsWith("owner-privilege")) return "key";
+  if (id === "owner-status") return "person";
+  if (id === "sell-simulation") return "exchange";
+  if (id === "market-data") return "chart";
+  return null;
+}
+
+function buildFindingIcon(id) {
+  const parts = FINDING_ICONS[findingIconKey(id)];
+  if (!parts) return null;
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "finding-icon");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  for (const [tag, attrs] of parts) {
+    const el = document.createElementNS(SVG_NS, tag);
+    for (const [name, value] of Object.entries(attrs)) el.setAttribute(name, value);
+    svg.appendChild(el);
+  }
+  return svg;
+}
+
 function buildFindingMarker() {
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("class", "finding-marker");
@@ -1587,6 +1625,8 @@ function buildFindingRow(f, groupKey, sellSimulation) {
   const item = document.createElement("div");
   item.className = `risk-finding risk-finding-${groupKey}`;
   item.appendChild(buildFindingMarker());
+  const icon = buildFindingIcon(f.id);
+  if (icon) item.appendChild(icon);
 
   const body = document.createElement("div");
   body.className = "finding-body";
@@ -1679,6 +1719,8 @@ function buildPendingFindingRow({ id, label, detail }) {
   item.className = "risk-finding risk-finding-pending";
   item.dataset.pendingId = id;
   item.appendChild(buildFindingMarker());
+  const icon = buildFindingIcon(id);
+  if (icon) item.appendChild(icon);
 
   const body = document.createElement("div");
   body.className = "finding-body";
