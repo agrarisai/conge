@@ -109,23 +109,25 @@ headers for this site's origin.
   disabled together for the whole scan (not just its first stage), since
   the owner/sell-simulation rate-limit spacing above assumes only one
   scan runs at a time.
-- **First-visit welcome splash** — the very first time a browser opens
-  the scanner, a full-screen welcome comes first: the logo with halo rings
+- **Welcome splash, once per tab** — each time a new tab or browser
+  session opens the scanner, a full-screen welcome comes first: the logo with halo rings
   pulsing out of its radar dot and a dashed signal line sweeping out of
   its own dashes, over soft drifting blue light, a one-line headline, what
   Conge does, and a single **Get started** button. It's focused on show,
   and the page behind is `inert` until it's dismissed. Dismissing it
-  fades it out and stores `conge:splashSeen` in `localStorage`, so it
-  never shows again in that browser. If storage is blocked, the splash is
-  skipped rather than shown on every visit. Under reduced motion
+  fades it out and stores `conge:splashSeen` in `sessionStorage`, so a
+  reload of the same tab skips it, but a new tab, or the browser after a
+  restart, shows it again. This is the same per-tab scope as the
+  shared-link auto-scan. If storage is blocked, the splash is skipped
+  rather than shown on every reload. Under reduced motion
   everything rests in place. The show/dismiss logic is an inline script
   right after the splash markup in `index.html`, so the button works even
   if a script file fails to load, and the decision is made before the
   rest of the page is parsed, so nothing flashes. A shared `?address=`
-  link opened on a first visit shows the splash first; app.js waits for
-  its `conge:splash-dismissed` event before the auto-scan runs. **To see
-  it again:** in DevTools, run `localStorage.removeItem("conge:splashSeen")`
-  and reload.
+  link opened in a new tab shows the splash first; app.js waits for its
+  `conge:splash-dismissed` event before the auto-scan runs. **To see it
+  again:** open the scanner in a new tab. Or, in the same tab, run
+  `sessionStorage.removeItem("conge:splashSeen")` in DevTools and reload.
 - **Cancel a scan** — while a scan is in flight, a **Cancel** button sits
   next to Scan. It aborts every request that scan started, both
   Blockscout and Worker (one `AbortController` per scan, passed down to

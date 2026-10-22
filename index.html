@@ -34,11 +34,12 @@
   <link rel="stylesheet" href="style.css?v=55728748c6" />
 </head>
 <body class="page-scanner">
-  <!-- First-visit welcome splash. Shown once per browser, before the
-       scanner, only if localStorage says it hasn't been seen — decided by
-       the inline script just below, before anything else on the page is
-       parsed, so a returning visitor never sees it flash and a first-time
-       one never sees the app flash first. Inline rather than a separate
+  <!-- Welcome splash. Shown once per tab session, before the scanner:
+       every new tab or browser session sees it, a reload of the same tab
+       doesn't (sessionStorage — the same per-tab scope as the shared-link
+       auto-scan). Decided by the inline script just below, before anything
+       else on the page is parsed, so a reload never sees it flash and a
+       new tab never sees the app flash first. Inline rather than a separate
        file on purpose: the "Get started" button must always work, even if
        a script download fails. app.js waits for "conge:splash-dismissed"
        before running a shared link's auto-scan. -->
@@ -74,9 +75,9 @@
       var splash = document.getElementById("splash");
       var root = document.documentElement;
       // Storage blocked or unavailable (private browsing etc.): skip the
-      // splash rather than show it on every visit.
+      // splash rather than show it on every reload.
       try {
-        if (window.localStorage.getItem(KEY)) return;
+        if (window.sessionStorage.getItem(KEY)) return;
       } catch (e) {
         return;
       }
@@ -100,7 +101,7 @@
 
       button.addEventListener("click", function () {
         try {
-          window.localStorage.setItem(KEY, "1");
+          window.sessionStorage.setItem(KEY, "1");
         } catch (e) {
           // Can't remember it — it was readable a moment ago, so this is rare.
         }
@@ -484,6 +485,6 @@
   </script>
   <script src="nav.js?v=b981a0accb" defer></script>
   <script src="scroll-fx.js?v=67bfb40a43" defer></script>
-  <script type="module" src="app.js?v=b6df99e3e2"></script>
+  <script type="module" src="app.js?v=8393abdbf6"></script>
 </body>
 </html>
