@@ -27,13 +27,97 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,600&display=swap"
     rel="stylesheet"
   />
 
-  <link rel="stylesheet" href="style.css?v=9b0e3523e4" />
+  <link rel="stylesheet" href="style.css?v=55728748c6" />
 </head>
 <body class="page-scanner">
+  <!-- First-visit welcome splash. Shown once per browser, before the
+       scanner, only if localStorage says it hasn't been seen — decided by
+       the inline script just below, before anything else on the page is
+       parsed, so a returning visitor never sees it flash and a first-time
+       one never sees the app flash first. Inline rather than a separate
+       file on purpose: the "Get started" button must always work, even if
+       a script download fails. app.js waits for "conge:splash-dismissed"
+       before running a shared link's auto-scan. -->
+  <div class="splash" id="splash" role="dialog" aria-modal="true" aria-labelledby="splash-title" aria-describedby="splash-text" hidden>
+    <div class="splash-bg" aria-hidden="true">
+      <span class="splash-blob splash-blob-1"></span>
+      <span class="splash-blob splash-blob-2"></span>
+      <span class="splash-blob splash-blob-3"></span>
+    </div>
+    <div class="splash-inner">
+      <div class="splash-banner" aria-hidden="true">
+        <span class="splash-grid"></span>
+        <div class="splash-mark">
+          <span class="splash-halo"></span>
+          <span class="splash-halo"></span>
+          <span class="splash-halo"></span>
+          <img class="splash-logo" src="assets/conge-mark.png" alt="" width="729" height="618" />
+          <svg class="splash-signal" focusable="false"><line x1="3" y1="50%" x2="100%" y2="50%"></line></svg>
+        </div>
+      </div>
+      <p class="splash-eyebrow">Token risk scanner · Robinhood Chain</p>
+      <h2 class="splash-title" id="splash-title">Scan any token before you trust it.</h2>
+      <p class="splash-text" id="splash-text">
+        Conge checks who controls a token, how its supply is spread, and whether selling actually
+        works — read-only, with no wallet connection and no private keys.
+      </p>
+      <button type="button" class="primary-button splash-cta" id="splash-start">Get started</button>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var KEY = "conge:splashSeen";
+      var splash = document.getElementById("splash");
+      var root = document.documentElement;
+      // Storage blocked or unavailable (private browsing etc.): skip the
+      // splash rather than show it on every visit.
+      try {
+        if (window.localStorage.getItem(KEY)) return;
+      } catch (e) {
+        return;
+      }
+      root.classList.add("splash-active");
+      splash.hidden = false;
+
+      // Everything else on the page is inert until dismissal, so Tab and
+      // screen readers stay on the splash.
+      function setPageInert(on) {
+        Array.prototype.forEach.call(document.body.children, function (el) {
+          if (el !== splash && el.tagName !== "SCRIPT") el.inert = on;
+        });
+      }
+
+      var button = document.getElementById("splash-start");
+      document.addEventListener("DOMContentLoaded", function () {
+        if (splash.hidden) return;
+        setPageInert(true);
+        button.focus();
+      });
+
+      button.addEventListener("click", function () {
+        try {
+          window.localStorage.setItem(KEY, "1");
+        } catch (e) {
+          // Can't remember it — it was readable a moment ago, so this is rare.
+        }
+        setPageInert(false);
+        splash.classList.add("is-leaving");
+        var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        setTimeout(function () {
+          splash.hidden = true;
+          root.classList.remove("splash-active");
+          var main = document.querySelector("main");
+          if (main) main.focus({ preventScroll: true });
+          document.dispatchEvent(new Event("conge:splash-dismissed"));
+        }, reduce ? 0 : 450);
+      }, { once: true });
+    })();
+  </script>
+
   <div class="bg-rings" aria-hidden="true"></div>
 
   <header class="site-header">
@@ -72,7 +156,7 @@
     </div>
   </header>
 
-  <main>
+  <main tabindex="-1">
     <div class="intro">
       <p class="intro-headline">See a token's real risk before you trust it.</p>
       <p class="intro-sub">
@@ -400,6 +484,6 @@
   </script>
   <script src="nav.js?v=b981a0accb" defer></script>
   <script src="scroll-fx.js?v=67bfb40a43" defer></script>
-  <script type="module" src="app.js?v=1fbbfcbb0b"></script>
+  <script type="module" src="app.js?v=b6df99e3e2"></script>
 </body>
 </html>
