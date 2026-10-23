@@ -629,7 +629,7 @@ identically rather than templated, since there's no build step to share
 it otherwise. The footer is a separate shared block, three columns
 (Brand, Product, Legal — there's no repo/issue-tracker link anywhere on
 the site, footer included: the repository is private; the one outside
-link is **Follow on X** (`https://x.com/congedotsite`, new tab), under the
+link is **@congedotsite** on X (`https://x.com/congedotsite`, new tab), under the
 brand blurb and as the last item in the hamburger menu) plus a small-print
 line with the
 current year (set by a couple of inline lines of vanilla JS on each page
