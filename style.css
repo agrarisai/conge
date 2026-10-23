@@ -425,6 +425,26 @@ summary:focus-visible {
   color: var(--color-accent-text);
 }
 
+/* External link (Conge on X): the one menu item with an icon, a line-
+   style X at the same 1.5px stroke as the finding icons, in slate so the
+   label stays the stronger element. */
+.nav-panel .site-nav a.nav-external {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.x-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: var(--color-slate);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* Deepened accent shade, not the raw #0B84F3 brand blue — same reasoning
    as --color-accent-text everywhere else it's used for small text: the
    raw accent falls under 4.5:1 as text on ivory/white. */
@@ -1909,6 +1929,27 @@ input[type="text"]::placeholder {
   font-size: 0.8125rem;
   color: var(--color-slate);
   max-width: 48ch;
+}
+
+/* Conge on X, under the brand blurb: the same 44px-tall, ink, medium-
+   weight treatment as .footer-links, with the line X icon in front. */
+.footer-social {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  margin-top: var(--footer-space-1);
+  color: var(--color-ink);
+  font-weight: 500;
+  text-decoration: none;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+
+.footer-social:hover,
+.footer-social:focus-visible {
+  text-decoration-line: underline;
+  text-decoration-color: var(--color-accent);
 }
 
 /* Quiet group label: slate, sentence case, medium weight, no tracking. */
