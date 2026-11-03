@@ -22,6 +22,16 @@ import worker, {
   UPSTREAM_TIMEOUT_MS,
   HEALTH_CACHE_MS,
   resetHealthCache,
+  RETRY_JITTER,
+  jitteredDelay,
+  CACHE_TTL_MS,
+  STALE_IF_ERROR_MAX_AGE_MS,
+  CACHE_HEADER,
+  canonicalize,
+  callIdentity,
+  isCacheableMethod,
+  cacheKeyRequest,
+  classifyCacheAge,
 } from "../index.js";
 
 const SITE_ORIGIN = "https://conge.site";
@@ -336,7 +346,8 @@ test('full request handler: a real POST — a 10-item batch, one eth_call with "
           method: "eth_call",
           params: [{ to: VALID_ADDRESS, from: OTHER_ADDRESS, data: "0xa9059cbb" }, "latest"],
         }
-      : { jsonrpc: "2.0", id: i, method: "eth_chainId", params: [] },
+      : // Distinct calls: identical ones would be merged (see the dedupe tests).
+        { jsonrpc: "2.0", id: i, method: "eth_call", params: [{ to: VALID_ADDRESS, data: "0x" + i.toString(16).padStart(8, "0") }, "latest"] },
   );
 
   const request = new Request(WORKER_URL, {
@@ -592,12 +603,15 @@ test("/health: a fresh upstream check happens once the shared window has passed"
 // the fast cases, since a full 5-attempt exhaustion takes the real
 // ~6s of backoff.
 
+// random() === 0.5 means a jitter factor of exactly 1 — the base schedule.
+const NO_JITTER = () => 0.5;
+
 test("decideUpstreamRetry: retries a 429/503 with the documented backoff, while attempts and time budget allow", () => {
-  assert.deepEqual(decideUpstreamRetry(429, 1, 0), { retry: true, delayMs: RETRY_DELAYS_MS[0] });
-  assert.deepEqual(decideUpstreamRetry(503, 1, 0), { retry: true, delayMs: RETRY_DELAYS_MS[0] });
-  assert.deepEqual(decideUpstreamRetry(429, 2, 500), { retry: true, delayMs: RETRY_DELAYS_MS[1] });
-  assert.deepEqual(decideUpstreamRetry(429, 3, 2000), { retry: true, delayMs: RETRY_DELAYS_MS[2] });
-  assert.deepEqual(decideUpstreamRetry(429, 4, 1000), { retry: true, delayMs: RETRY_DELAYS_MS[3] });
+  assert.deepEqual(decideUpstreamRetry(429, 1, 0, NO_JITTER), { retry: true, delayMs: RETRY_DELAYS_MS[0] });
+  assert.deepEqual(decideUpstreamRetry(503, 1, 0, NO_JITTER), { retry: true, delayMs: RETRY_DELAYS_MS[0] });
+  assert.deepEqual(decideUpstreamRetry(429, 2, 500, NO_JITTER), { retry: true, delayMs: RETRY_DELAYS_MS[1] });
+  assert.deepEqual(decideUpstreamRetry(429, 3, 2000, NO_JITTER), { retry: true, delayMs: RETRY_DELAYS_MS[2] });
+  assert.deepEqual(decideUpstreamRetry(429, 4, 1000, NO_JITTER), { retry: true, delayMs: RETRY_DELAYS_MS[3] });
 });
 
 test("decideUpstreamRetry: never retries a non-retryable status, however early", () => {
@@ -616,13 +630,13 @@ test("decideUpstreamRetry: stops early (before exhausting attempts) when the nex
   // already used most of the 8s budget, there isn't room for another
   // 3200ms wait — this is the "cap attempts to respect the timeout" case.
   const elapsedMs = UPSTREAM_TIMEOUT_MS - RETRY_DELAYS_MS[3] + 1; // 1ms short of enough room
-  const decision = decideUpstreamRetry(429, 4, elapsedMs);
+  const decision = decideUpstreamRetry(429, 4, elapsedMs, NO_JITTER);
   assert.deepEqual(decision, { retry: false, reason: "time-budget" });
 });
 
 test("decideUpstreamRetry: does retry when there's exactly enough time left", () => {
   const elapsedMs = UPSTREAM_TIMEOUT_MS - RETRY_DELAYS_MS[3] - 1; // 1ms of room to spare
-  const decision = decideUpstreamRetry(429, 4, elapsedMs);
+  const decision = decideUpstreamRetry(429, 4, elapsedMs, NO_JITTER);
   assert.deepEqual(decision, { retry: true, delayMs: RETRY_DELAYS_MS[3] });
 });
 
@@ -740,4 +754,307 @@ test("a non-retryable upstream error (e.g. 500) fails immediately, with no retry
   assert.equal(response.status, 502);
   const body = await response.json();
   assert.equal(body.kind, undefined);
+});
+
+// --- Retry jitter ---------------------------------------------------------
+
+test("jitteredDelay stays within ±25% of the base delay", () => {
+  assert.equal(RETRY_JITTER, 0.25);
+  assert.equal(jitteredDelay(400, () => 0), 300);
+  assert.equal(jitteredDelay(400, () => 0.5), 400);
+  assert.equal(jitteredDelay(400, () => 0.999999), 500);
+  for (let i = 0; i < 2000; i++) {
+    for (const base of RETRY_DELAYS_MS) {
+      const d = jitteredDelay(base);
+      assert.ok(d >= base * 0.75 && d <= base * 1.25, `${d} outside ±25% of ${base}`);
+    }
+  }
+});
+
+test("decideUpstreamRetry: the 8s deadline check uses the jittered delay", () => {
+  // 3200ms base: +25% (4000ms) no longer fits where -25% (2400ms) still does.
+  const elapsedMs = UPSTREAM_TIMEOUT_MS - 3000;
+  assert.deepEqual(decideUpstreamRetry(429, 4, elapsedMs, () => 0), { retry: true, delayMs: 2400 });
+  assert.deepEqual(decideUpstreamRetry(429, 4, elapsedMs, () => 0.999999), { retry: false, reason: "time-budget" });
+});
+
+test("decideUpstreamRetry: jitter never changes which statuses retry or the attempt cap", () => {
+  for (const random of [() => 0, () => 0.999999]) {
+    assert.deepEqual(decideUpstreamRetry(500, 1, 0, random), { retry: false, reason: "not-retryable" });
+    assert.deepEqual(decideUpstreamRetry(429, MAX_UPSTREAM_ATTEMPTS, 0, random), { retry: false, reason: "exhausted-attempts" });
+  }
+});
+
+// --- Cache keys -------------------------------------------------------------
+
+test("cache TTLs: eth_call 60s, eth_getCode 10min, eth_chainId 1h, eth_blockNumber never cached", () => {
+  assert.equal(CACHE_TTL_MS.eth_call, 60_000);
+  assert.equal(CACHE_TTL_MS.eth_getCode, 600_000);
+  assert.equal(CACHE_TTL_MS.eth_chainId, 3_600_000);
+  assert.equal(isCacheableMethod("eth_blockNumber"), false);
+  assert.equal(STALE_IF_ERROR_MAX_AGE_MS, 600_000);
+});
+
+test("canonicalize: key order and hex case don't matter", () => {
+  assert.equal(canonicalize({ b: "0xAB", a: [1, "X"] }), canonicalize({ a: [1, "x"], b: "0xab" }));
+});
+
+test("callIdentity: normalizes case, ignores the JSON-RPC id, but includes from/data/override", () => {
+  const base = { jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: VALID_ADDRESS, data: "0x8da5cb5b" }, "latest"] };
+  const sameUpper = { ...base, id: "other", params: [{ to: VALID_ADDRESS.toUpperCase().replace("0X", "0x"), data: "0x8DA5CB5B" }, "latest"] };
+  assert.equal(callIdentity(base), callIdentity(sameUpper));
+  const viaInput = { ...base, params: [{ to: VALID_ADDRESS, input: "0x8da5cb5b" }, "latest"] };
+  assert.equal(callIdentity(base), callIdentity(viaInput));
+  const withFrom = { ...base, params: [{ to: VALID_ADDRESS, from: OTHER_ADDRESS, data: "0x8da5cb5b" }, "latest"] };
+  assert.notEqual(callIdentity(base), callIdentity(withFrom));
+  const otherData = { ...base, params: [{ to: VALID_ADDRESS, data: "0x70a08231" }, "latest"] };
+  assert.notEqual(callIdentity(base), callIdentity(otherData));
+  const withOverride = { ...base, params: [{ to: VALID_ADDRESS, data: "0x8da5cb5b" }, "latest", { [OTHER_ADDRESS]: { balance: "0x1" } }] };
+  assert.notEqual(callIdentity(base), callIdentity(withOverride));
+});
+
+test("cacheKeyRequest: a GET on the Worker's own host whose path is only a hash", async () => {
+  const req = await cacheKeyRequest(callIdentity({ method: "eth_call", params: [{ to: VALID_ADDRESS, data: "0x01" }, "latest"] }), WORKER_URL);
+  assert.equal(req.method, "GET");
+  const url = new URL(req.url);
+  assert.equal(url.host, "rpc.conge.site");
+  assert.match(url.pathname, /^\/__cache\/v1\/[0-9a-f]{64}$/);
+  // Nothing readable about the call (address, calldata) ends up in the key.
+  assert.doesNotMatch(req.url.toLowerCase(), new RegExp(VALID_ADDRESS.slice(2).toLowerCase()));
+});
+
+test("classifyCacheAge: fresh within TTL, stale up to 10 minutes, then expired", () => {
+  const now = 1_000_000_000;
+  assert.equal(classifyCacheAge(now - 59_000, now, CACHE_TTL_MS.eth_call), "fresh");
+  assert.equal(classifyCacheAge(now - 61_000, now, CACHE_TTL_MS.eth_call), "stale");
+  assert.equal(classifyCacheAge(now - 600_000, now, CACHE_TTL_MS.eth_call), "stale");
+  assert.equal(classifyCacheAge(now - 600_001, now, CACHE_TTL_MS.eth_call), "expired");
+  assert.equal(classifyCacheAge(now - 9 * 60_000, now, CACHE_TTL_MS.eth_getCode), "fresh");
+  assert.equal(classifyCacheAge(now - 59 * 60_000, now, CACHE_TTL_MS.eth_chainId), "fresh");
+  assert.equal(classifyCacheAge(NaN, now, CACHE_TTL_MS.eth_call), "expired");
+  assert.equal(classifyCacheAge(now + 5000, now, CACHE_TTL_MS.eth_call), "expired");
+});
+
+// --- Cache through the full request handler ---------------------------------
+//
+// An in-memory stand-in for the Workers Cache API (caches.default), keyed
+// by URL like the real one; the upstream is a stubbed fetch that records
+// every call it receives.
+
+class FakeCache {
+  constructor() {
+    this.store = new Map();
+  }
+  async match(request) {
+    const hit = this.store.get(request.url);
+    return hit ? hit.clone() : undefined;
+  }
+  async put(request, response) {
+    this.store.set(request.url, response.clone());
+  }
+}
+
+function setupCacheTest(t, { now = 1_800_000_000_000 } = {}) {
+  const cache = new FakeCache();
+  const originalCaches = globalThis.caches;
+  const originalFetch = globalThis.fetch;
+  globalThis.caches = { default: cache };
+  const state = { now, upstreamCalls: [], mode: "ok", results: (req) => "0x" + req.params?.[0]?.data?.slice(2, 10).padStart(64, "0") };
+  t.mock.method(Date, "now", () => state.now);
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    const items = Array.isArray(body) ? body : [body];
+    state.upstreamCalls.push(items);
+    if (state.mode === "500") return new Response("oops", { status: 500 });
+    if (state.mode === "throw") throw new TypeError("network down");
+    const out = items.map((r) =>
+      state.errorFor?.(r) ? { jsonrpc: "2.0", id: r.id, error: { code: 3, message: "execution reverted" } } : { jsonrpc: "2.0", id: r.id, result: state.results(r) },
+    );
+    return new Response(JSON.stringify(Array.isArray(body) ? out : out[0]), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  t.after(() => {
+    globalThis.caches = originalCaches;
+    globalThis.fetch = originalFetch;
+  });
+  return { cache, state };
+}
+
+const call = (id, data, extra = {}) => ({ jsonrpc: "2.0", id, method: "eth_call", params: [{ to: VALID_ADDRESS, data, ...extra }, "latest"] });
+
+async function post(body, origin = SITE_ORIGIN) {
+  const response = await worker.fetch(
+    new Request(WORKER_URL, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+  );
+  return { status: response.status, cacheHeader: response.headers.get(CACHE_HEADER), body: await response.json(), headers: response.headers };
+}
+
+test("cache: a repeated batch is answered from cache with the caller's own ids and order, and no upstream call", async (t) => {
+  const { state } = setupCacheTest(t);
+  const first = await post([call(7, "0x8da5cb5b"), call("b", "0x70a08231")]);
+  assert.equal(first.status, 200);
+  assert.equal(first.cacheHeader, "miss");
+  assert.equal(state.upstreamCalls.length, 1);
+  assert.equal(state.upstreamCalls[0].length, 2);
+
+  state.now += 30_000;
+  const second = await post([call("x", "0x8da5cb5b"), call(99, "0x70a08231")]);
+  assert.equal(second.cacheHeader, "hit");
+  assert.equal(state.upstreamCalls.length, 1, "no new upstream call");
+  assert.deepEqual(second.body.map((r) => r.id), ["x", 99]);
+  assert.deepEqual(second.body.map((r) => r.result), first.body.map((r) => r.result));
+  assert.equal(second.headers.get("access-control-expose-headers"), "X-Conge-Cache");
+});
+
+test("cache: a partly cached batch sends only the misses upstream and merges results back in order", async (t) => {
+  const { state } = setupCacheTest(t);
+  await post([call(1, "0x8da5cb5b")]);
+  const res = await post([call("a", "0x11111111"), call("b", "0x8da5cb5b"), call("c", "0x22222222")]);
+  assert.equal(res.cacheHeader, "partial");
+  const lastUpstream = state.upstreamCalls.at(-1);
+  assert.deepEqual(lastUpstream.map((r) => r.params[0].data), ["0x11111111", "0x22222222"]);
+  assert.deepEqual(res.body.map((r) => r.id), ["a", "b", "c"]);
+  assert.deepEqual(
+    res.body.map((r) => r.result),
+    ["0x11111111", "0x8da5cb5b", "0x22222222"].map((d) => "0x" + d.slice(2).padStart(64, "0")),
+  );
+});
+
+test("cache: eth_call entries expire after 60s", async (t) => {
+  const { state } = setupCacheTest(t);
+  await post(call(1, "0x8da5cb5b"));
+  state.now += 61_000;
+  const res = await post(call(2, "0x8da5cb5b"));
+  assert.equal(res.cacheHeader, "miss");
+  assert.equal(state.upstreamCalls.length, 2);
+  assert.equal(res.body.id, 2);
+});
+
+test("cache: JSON-RPC errors are never cached", async (t) => {
+  const { state } = setupCacheTest(t);
+  state.errorFor = () => true;
+  const first = await post(call(1, "0x8da5cb5b"));
+  assert.equal(first.body.error.message, "execution reverted");
+  state.errorFor = null;
+  const second = await post(call(2, "0x8da5cb5b"));
+  assert.equal(state.upstreamCalls.length, 2, "the error wasn't served from cache");
+  assert.ok(second.body.result);
+  assert.equal(second.body.id, 2);
+});
+
+test("cache: an upstream failure (HTTP 5xx) is never cached", async (t) => {
+  const { state, cache } = setupCacheTest(t);
+  state.mode = "500";
+  const res = await post(call(1, "0x8da5cb5b"));
+  assert.equal(res.status, 502);
+  assert.equal(cache.store.size, 0);
+});
+
+test("cache: eth_blockNumber is never cached", async (t) => {
+  const { state, cache } = setupCacheTest(t);
+  state.results = () => "0x10";
+  await post({ jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] });
+  const res = await post({ jsonrpc: "2.0", id: 2, method: "eth_blockNumber", params: [] });
+  assert.equal(state.upstreamCalls.length, 2);
+  assert.equal(res.cacheHeader, "bypass");
+  assert.equal(cache.store.size, 0);
+});
+
+test("cache: eth_getCode stays fresh for 10 minutes, eth_chainId for an hour", async (t) => {
+  const { state } = setupCacheTest(t);
+  state.results = () => "0x6080";
+  const getCode = (id) => ({ jsonrpc: "2.0", id, method: "eth_getCode", params: [VALID_ADDRESS, "latest"] });
+  const chainId = (id) => ({ jsonrpc: "2.0", id, method: "eth_chainId", params: [] });
+  await post([getCode(1), chainId(2)]);
+  state.now += 9 * 60_000;
+  assert.equal((await post([getCode(3), chainId(4)])).cacheHeader, "hit");
+  state.now += 2 * 60_000; // 11 min: getCode expired, chainId still fresh
+  const res = await post([getCode(5), chainId(6)]);
+  assert.equal(res.cacheHeader, "partial");
+  assert.equal(state.upstreamCalls.at(-1)[0].method, "eth_getCode");
+});
+
+test("stale-if-error: on upstream failure, a cached result up to 10 minutes old is served, marked stale", async (t) => {
+  const { state } = setupCacheTest(t);
+  const fresh = await post([call(1, "0x8da5cb5b"), call(2, "0x70a08231")]);
+  state.now += 5 * 60_000; // past the 60s TTL, within 10 minutes
+  for (const mode of ["500", "throw"]) {
+    state.mode = mode;
+    const res = await post([call("p", "0x70a08231"), call("q", "0x8da5cb5b")]);
+    assert.equal(res.status, 200, mode);
+    assert.equal(res.cacheHeader, "stale", mode);
+    assert.deepEqual(res.body.map((r) => r.id), ["p", "q"]);
+    assert.deepEqual(res.body.map((r) => r.result), [fresh.body[1].result, fresh.body[0].result]);
+  }
+});
+
+test("stale-if-error: older than 10 minutes is not served — the failure is returned as before", async (t) => {
+  const { state } = setupCacheTest(t);
+  await post(call(1, "0x8da5cb5b"));
+  state.now += 10 * 60_000 + 1;
+  state.mode = "500";
+  const res = await post(call(2, "0x8da5cb5b"));
+  assert.equal(res.status, 502);
+  assert.equal(res.cacheHeader, null);
+});
+
+test("stale-if-error: if any call that needed the upstream has no cached fallback, the failure is returned (no partial stale)", async (t) => {
+  const { state } = setupCacheTest(t);
+  await post(call(1, "0x8da5cb5b"));
+  state.now += 2 * 60_000;
+  state.mode = "500";
+  const res = await post([call(2, "0x8da5cb5b"), call(3, "0x99999999")]);
+  assert.equal(res.status, 502);
+});
+
+test("stale data is only ever served with the X-Conge-Cache: stale header; a healthy upstream refreshes it", async (t) => {
+  const { state } = setupCacheTest(t);
+  await post(call(1, "0x8da5cb5b"));
+  state.now += 5 * 60_000;
+  const res = await post(call(2, "0x8da5cb5b"));
+  assert.equal(res.cacheHeader, "miss", "stale entry not used while upstream is healthy");
+  assert.equal(state.upstreamCalls.length, 2);
+});
+
+test("dedupe: identical calls in one batch go upstream once and each keeps its own id", async (t) => {
+  const { state } = setupCacheTest(t);
+  const res = await post([call(1, "0x8da5cb5b"), call(2, "0x70a08231"), call(3, "0x8DA5CB5B"), call(1, "0x8da5cb5b")]);
+  assert.equal(state.upstreamCalls.length, 1);
+  assert.equal(state.upstreamCalls[0].length, 2);
+  assert.deepEqual(res.body.map((r) => r.id), [1, 2, 3, 1]);
+  assert.equal(res.body[0].result, res.body[2].result);
+  assert.equal(res.body[0].result, res.body[3].result);
+});
+
+test("dedupe works without a cache too (workers.dev, or no Cache API)", async (t) => {
+  const { state } = setupCacheTest(t);
+  globalThis.caches = undefined;
+  const res = await post([call(1, "0x8da5cb5b"), call(2, "0x8da5cb5b")]);
+  assert.equal(res.cacheHeader, "bypass");
+  assert.equal(state.upstreamCalls[0].length, 1);
+  assert.deepEqual(res.body.map((r) => r.id), [1, 2]);
+});
+
+test("cache doesn't loosen validation: disallowed methods and non-latest blocks are still rejected inside a cached batch", async (t) => {
+  const { state } = setupCacheTest(t);
+  await post(call(1, "0x8da5cb5b"));
+  const res = await post([
+    call("ok", "0x8da5cb5b"),
+    { jsonrpc: "2.0", id: "send", method: "eth_sendRawTransaction", params: ["0xdead"] },
+    { jsonrpc: "2.0", id: "old", method: "eth_call", params: [{ to: VALID_ADDRESS, data: "0x8da5cb5b" }, "0x1"] },
+  ]);
+  assert.equal(res.body[0].id, "ok");
+  assert.ok(res.body[0].result);
+  assert.equal(res.body[1].error.code, -32601);
+  assert.equal(res.body[2].error.code, -32602);
+  assert.equal(state.upstreamCalls.length, 1, "nothing new sent upstream");
+});
+
+test("cache doesn't loosen the origin check: a disallowed origin gets 403 even for a cached call", async (t) => {
+  const { state } = setupCacheTest(t);
+  await post(call(1, "0x8da5cb5b"));
+  const res = await post(call(2, "0x8da5cb5b"), "https://evil.example");
+  assert.equal(res.status, 403);
+  assert.equal(res.headers.get("access-control-allow-origin"), null);
+  assert.equal(res.cacheHeader, null);
+  assert.equal(state.upstreamCalls.length, 1);
 });
