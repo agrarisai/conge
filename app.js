@@ -8,6 +8,7 @@ import {
   scoreOwnerPrivileges,
   scoreOwnerStatus,
   scoreSellSimulation,
+  scoreUniswapV4Presence,
   scoreMarketData,
   computeOverallLevel,
   addThousandsSeparators,
@@ -20,11 +21,12 @@ import {
   padAddressArg,
   encodeTransferCallData,
   decodeAddressResult,
+  decodeUintResult,
   decodeTransferOutcome,
   THRESHOLDS,
   lacksTokenMetadata,
   classifyScanTarget,
-} from "./scoring.js?v=0d36ac69d9";
+} from "./scoring.js?v=7ff86138c8";
 
 // Cloudflare Worker RPC proxy (see worker/) — a thin, read-only JSON-RPC
 // proxy for rpc.mainnet.chain.robinhood.com, served on the project's own
@@ -137,6 +139,15 @@ function enqueueWorkerJob(job) {
 // just needs to be a plain, ordinary-looking recipient distinct from the
 // zero/burn addresses (which some tokens special-case).
 const PROBE_RECIPIENT_ADDRESS = "0x" + "ab".repeat(20);
+
+// The Uniswap v4 PoolManager on Robinhood Chain: one singleton contract
+// that holds the tokens of every Uniswap v4 pool, labelled "Uniswap: Pool
+// Manager" on the block explorer. It has no token0()/token1(), so the pool
+// detection in runSellSimulation never recognizes it. A scan reads its
+// balanceOf() for the scanned token instead (see fetchOwnerViaWorker): a
+// positive balance means at least one v4 pool holds the token — where it
+// trades, not how deep the liquidity is.
+const UNISWAP_V4_POOL_MANAGER = "0x8366a39CC670B4001A1121B8F6A443A643e40951";
 
 // The address most recently scanned successfully (if any) — set in
 // scanToken below. Used only by "Test Worker connection" to run its
@@ -627,18 +638,31 @@ async function callWorkerChunked(calls, label, signal) {
 }
 
 // Reads a token's owner() through the Worker (the one thing Blockscout has
-// no generic field for). Returns { owner, diagnostics } — owner is null if
+// no generic field for), plus the Uniswap v4 PoolManager's balanceOf() for
+// the same token in the same batch — one HTTP request, no extra load on
+// the rate-limited upstream. Returns { owner, diagnostics,
+// poolManagerBalanceRaw } — owner is null if
 // the call failed for any reason (unverified/no owner(), reverted, Worker
 // down); diagnostics (only present when owner is null) is a list of raw
 // diagnostics for the "Owner unknown" finding's Technical details panel,
 // so "the Worker is down" and "this contract has no owner()" both keep
 // their real underlying error instead of collapsing into a bare "Unknown".
+// poolManagerBalanceRaw is a base-10 string, or null if that call failed
+// (each call in the batch succeeds or fails on its own).
 async function fetchOwnerViaWorker(tokenAddress, signal) {
-  const outcome = await callWorkerChunked([{ to: tokenAddress, data: SELECTOR.owner }], `${WORKER_SOURCE} — eth_call owner()`, signal);
-  if (!outcome.ok) return { owner: null, diagnostics: outcome.diagnostics };
-  const result = outcome.results[0];
-  if (!result.ok) return { owner: null, diagnostics: [result.diagnostic] };
-  return { owner: decodeAddressResult(result.result), diagnostics: null };
+  const outcome = await callWorkerChunked(
+    [
+      { to: tokenAddress, data: SELECTOR.owner },
+      { to: tokenAddress, data: SELECTOR.balanceOf + padAddressArg(UNISWAP_V4_POOL_MANAGER) },
+    ],
+    `${WORKER_SOURCE} — eth_call owner() + balanceOf(Uniswap v4 PoolManager)`,
+    signal,
+  );
+  if (!outcome.ok) return { owner: null, diagnostics: outcome.diagnostics, poolManagerBalanceRaw: null };
+  const [ownerResult, balanceResult] = outcome.results;
+  const poolManagerBalanceRaw = balanceResult.ok ? decodeUintResult(balanceResult.result) : null;
+  if (!ownerResult.ok) return { owner: null, diagnostics: [ownerResult.diagnostic], poolManagerBalanceRaw };
+  return { owner: decodeAddressResult(ownerResult.result), diagnostics: null, poolManagerBalanceRaw };
 }
 
 // --- Sell-simulation honeypot check ---------------------------------------
@@ -1327,7 +1351,9 @@ const SUMMARY_SENTENCE = {
 };
 
 function groupKeyFor(finding) {
-  if (finding.known === false) return "unknown";
+  // Neutral facts (e.g. "Trades on Uniswap v4") are neither a pass nor a
+  // risk, so they sit with Info, never under Passed.
+  if (finding.known === false || finding.neutral) return "unknown";
   return finding.severity === "info" ? "passed" : finding.severity;
 }
 
@@ -1481,7 +1507,7 @@ function findingIconKey(id) {
   if (id === "owner-privilege-proxyUpgrade") return "layers";
   if (id === "owner-privileges" || id.startsWith("owner-privilege")) return "key";
   if (id === "owner-status") return "person";
-  if (id === "sell-simulation") return "exchange";
+  if (id === "sell-simulation" || id === "uniswap-v4-pool") return "exchange";
   if (id === "market-data") return "chart";
   return null;
 }
@@ -2215,9 +2241,13 @@ async function scanToken(rawAddress) {
     // needs the holder list from stage 1.
     const ownerOutcome = await ownerOutcomePromise;
     if (!isCurrentScan()) return;
-    const { owner, diagnostics: ownerDiagnostics } = ownerOutcome;
+    const { owner, diagnostics: ownerDiagnostics, poolManagerBalanceRaw } = ownerOutcome;
     const ownerFinding = scoreOwnerStatus(owner, ownerDiagnostics);
     resolvePendingFinding("owner-status", ownerFinding, null);
+    // Neutral, and only when the PoolManager actually holds this token; a
+    // failed read adds nothing (the sell-simulation finding stays as is).
+    const v4Finding = scoreUniswapV4Presence({ balanceRaw: poolManagerBalanceRaw, totalSupplyRaw });
+    if (v4Finding) addFindingToGroup(v4Finding);
 
     resultOwnerEl.textContent = owner ? `${owner} (via ${WORKER_SOURCE})` : UNAVAILABLE;
     resultSourceEl.textContent = owner ? `${BLOCKSCOUT_SOURCE} + ${WORKER_SOURCE} (secondary, owner)` : BLOCKSCOUT_SOURCE;

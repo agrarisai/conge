@@ -76,8 +76,11 @@ export const THRESHOLDS = {
 // owner-status and sell-simulation use it today, to back a per-finding
 // "Technical details" panel with the real error instead of a bare
 // "Unknown". Purely informational: never affects severity/known/scoring.
-function finding({ id, severity, known = true, countsTowardLevel = true, title, detail, diagnostics = null }) {
-  return { id, severity, known, countsTowardLevel, title, detail, diagnostics };
+// neutral: a known fact that is neither a pass nor a risk (e.g. "trades on
+// Uniswap v4"). The UI lists it under Info, never under Passed; it should
+// also set countsTowardLevel: false.
+function finding({ id, severity, known = true, countsTowardLevel = true, neutral = false, title, detail, diagnostics = null }) {
+  return { id, severity, known, countsTowardLevel, neutral, title, detail, diagnostics };
 }
 
 export function isBurnOrZeroAddress(address) {
@@ -167,7 +170,7 @@ export const SELECTOR = {
   owner: "0x8da5cb5b", // owner()
   token0: "0x0dfe1681", // token0()
   token1: "0xd21220a7", // token1()
-  balanceOf: "0x70a08231", // balanceOf(address) — used only by the "Test Worker connection" self-test
+  balanceOf: "0x70a08231", // balanceOf(address) — the Uniswap v4 PoolManager's balance during a scan, and the "Test Worker connection" self-test
 };
 
 const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
@@ -207,6 +210,16 @@ export function decodeAddressResult(hex) {
   const upper = word.slice(0, 24);
   if (!/^0+$/.test(upper)) return null;
   return "0x" + word.slice(24);
+}
+
+// Decodes a single `uint256` from eth_call returndata (e.g. balanceOf())
+// as a base-10 integer string. Returns null if the data doesn't contain
+// one full, well-formed word — never guesses.
+export function decodeUintResult(hex) {
+  if (typeof hex !== "string" || !hex.startsWith("0x")) return null;
+  const word = hex.slice(2, 66);
+  if (!/^[0-9a-fA-F]{64}$/.test(word)) return null;
+  return BigInt("0x" + word).toString();
 }
 
 // Decodes a single `bool` from eth_call returndata: any non-zero 32-byte
@@ -740,9 +753,9 @@ export function scoreSellSimulation(simulation) {
       id: "sell-simulation",
       known: false,
       severity: SEVERITY.INFO,
-      title: "No liquidity pool found among top holders",
+      title: "No V2-style pool found among top holders",
       detail:
-        "None of the top holders looked like a liquidity pool for this token (checked via token0()/token1()), so a sell could not be simulated.",
+        "None of the top holders answered token0()/token1() like a V2-style liquidity pool for this token, so a sell could not be simulated. This does not mean the token has no liquidity: Uniswap v4 pools, for example, all live in one shared contract and are not found this way.",
     });
   }
 
@@ -753,7 +766,7 @@ export function scoreSellSimulation(simulation) {
       severity: SEVERITY.INFO,
       title: "No eligible holder found to simulate a sell",
       detail:
-        "A liquidity pool was found, but no top holder (a plain wallet, not a contract, with a positive balance) was available to simulate a transfer from.",
+        "A V2-style pool was found, but no top holder (a plain wallet, not a contract, with a positive balance) was available to simulate a transfer from.",
     });
   }
 
@@ -786,7 +799,48 @@ export function scoreSellSimulation(simulation) {
     severity: SEVERITY.INFO,
     title: "Sell simulation passed",
     detail:
-      "A simulated transfer to both an ordinary address and a detected liquidity pool succeeded. This is an indicator, not a guarantee — it can't detect every trap (see “What Conge cannot detect” on the How it works page).",
+      "A simulated transfer to both an ordinary address and a detected V2-style pool succeeded. This is an indicator, not a guarantee — it can't detect every trap (see “What Conge cannot detect” on the How it works page). A transfer into a pool does not represent a Uniswap v4 swap, so if this token also trades on Uniswap v4, a pass here does not prove it can be sold there.",
+  });
+}
+
+// --- Uniswap v4 presence (informational — does not affect overall level) --
+
+// balanceRaw: the Uniswap v4 PoolManager's balanceOf() for this token, as a
+// raw base-unit integer string (see UNISWAP_V4_POOL_MANAGER in app.js), or
+// null if the read failed. totalSupplyRaw: same units, or null.
+// Returns a finding only when the PoolManager holds a positive balance —
+// i.e. at least one Uniswap v4 pool holds this token. That says where the
+// token trades, not how deep the liquidity is or whether selling works, so
+// it's neutral: never a pass, never counted toward the level. A zero
+// balance or a failed read returns null — nothing is claimed either way.
+export function scoreUniswapV4Presence({ balanceRaw, totalSupplyRaw } = {}) {
+  let balance;
+  try {
+    balance = BigInt(balanceRaw);
+  } catch {
+    return null;
+  }
+  if (balance <= 0n) return null;
+
+  let share = null;
+  try {
+    if (totalSupplyRaw != null && BigInt(totalSupplyRaw) > 0n) {
+      const pct = computeHolderPercentage(balanceRaw, totalSupplyRaw);
+      share = pct < 0.1 ? "less than 0.1%" : `${formatPct(pct)}%`;
+    }
+  } catch {
+    share = null;
+  }
+
+  return finding({
+    id: "uniswap-v4-pool",
+    severity: SEVERITY.INFO,
+    countsTowardLevel: false,
+    neutral: true,
+    title: "Trades on Uniswap v4",
+    detail: share
+      ? `The pool manager holds ${share} of supply. Liquidity depth was not measured.`
+      : "The pool manager holds some of this token; its share of supply could not be computed. Liquidity depth was not measured.",
   });
 }
 
@@ -845,8 +899,9 @@ export function scoreToken(facts, thresholds = THRESHOLDS) {
     ),
     scoreOwnerStatus(facts.owner, facts.ownerDiagnostics),
     scoreSellSimulation(facts.sellSimulation),
+    scoreUniswapV4Presence({ balanceRaw: facts.poolManagerBalanceRaw, totalSupplyRaw: facts.totalSupplyRaw }),
     scoreMarketData(facts.marketData ?? {}),
-  ];
+  ].filter(Boolean);
   return { overallLevel: computeOverallLevel(findings, thresholds), findings };
 }
 
