@@ -31,8 +31,10 @@ import {
   encodeTransferCallData,
   decodeAddressResult,
   decodeBoolResult,
+  decodeUintResult,
   decodeTransferOutcome,
   scoreSellSimulation,
+  scoreUniswapV4Presence,
   scoreMarketData,
   computeOverallLevel,
   scoreToken,
@@ -589,7 +591,7 @@ test("scoreSellSimulation: a non-rate-limited unreachable cause keeps the existi
 
 test("scoreSellSimulation: 'no pool found' and 'no eligible holder' keep their own distinct messages, never the rate-limited one", () => {
   const noPool = scoreSellSimulation({ status: "no-pool", pools: [], holderAttempts: [] });
-  assert.match(noPool.title, /no liquidity pool/i);
+  assert.match(noPool.title, /no V2-style pool/i);
   assert.doesNotMatch(noPool.detail, /rate limited/i);
 
   const noHolder = scoreSellSimulation({ status: "no-holder", pools: [{ address: POOL, token0: TOKEN, token1: OTHER_TOKEN }], holderAttempts: [] });
@@ -606,7 +608,26 @@ test("scoreSellSimulation: no pool found -> Unknown-flavored info, not a pass", 
   const f = scoreSellSimulation({ status: "no-pool", pools: [], holderAttempts: [] });
   assert.equal(f.known, false);
   assert.equal(f.severity, SEVERITY.INFO);
-  assert.match(f.title, /no liquidity pool/i);
+  assert.match(f.title, /no V2-style pool/i);
+});
+
+test("scoreSellSimulation: 'no pool' wording never claims the token has no liquidity", () => {
+  const f = scoreSellSimulation({ status: "no-pool", pools: [], holderAttempts: [] });
+  assert.equal(f.title, "No V2-style pool found among top holders");
+  assert.doesNotMatch(f.title, /no liquidity/i);
+  assert.match(f.detail, /does not mean the token has no liquidity/i);
+  assert.match(f.detail, /Uniswap v4/);
+});
+
+test("scoreSellSimulation: a pass says a pool transfer does not represent a Uniswap v4 swap", () => {
+  const f = scoreSellSimulation({
+    status: "simulated",
+    pools: [{ address: POOL, token0: TOKEN, token1: OTHER_TOKEN }],
+    holderAttempts: [{ holder: HOLDER, baseline: { success: true }, sells: [{ pool: POOL, success: true }] }],
+  });
+  assert.equal(f.title, "Sell simulation passed");
+  assert.match(f.detail, /does not represent a Uniswap v4 swap/);
+  assert.match(f.detail, /does not prove it can be sold/);
 });
 
 test("scoreSellSimulation: no eligible holder -> Unknown-flavored info, not a pass", () => {
@@ -1051,4 +1072,86 @@ test("classifyScanTarget: wallets, real tokens and unconfirmed cases", () => {
   assert.equal(classifyScanTarget({ token: "failed", isContract: true }), "token-unconfirmed");
   assert.equal(classifyScanTarget({ token: "failed", isContract: null }), "token-unconfirmed");
   assert.equal(classifyScanTarget({ token: "failed", isContract: false }), "wallet");
+});
+
+// --- Uniswap v4 presence ------------------------------------------------------
+
+test("decodeUintResult: decodes one uint256 word, rejects malformed data", () => {
+  assert.equal(decodeUintResult("0x" + "0".repeat(63) + "a"), "10");
+  assert.equal(decodeUintResult("0x" + "f".repeat(64)), (2n ** 256n - 1n).toString());
+  assert.equal(decodeUintResult("0x" + "0".repeat(64)), "0");
+  assert.equal(decodeUintResult("0x"), null);
+  assert.equal(decodeUintResult("0x1234"), null);
+  assert.equal(decodeUintResult("0x" + "z".repeat(64)), null);
+  assert.equal(decodeUintResult(null), null);
+});
+
+test("scoreUniswapV4Presence: positive balance + known supply -> neutral Info with the share", () => {
+  const f = scoreUniswapV4Presence({ balanceRaw: "125000", totalSupplyRaw: "1000000" });
+  assert.equal(f.id, "uniswap-v4-pool");
+  assert.equal(f.severity, SEVERITY.INFO);
+  assert.equal(f.known, true);
+  assert.equal(f.neutral, true);
+  assert.equal(f.countsTowardLevel, false);
+  assert.equal(f.title, "Trades on Uniswap v4");
+  assert.equal(f.detail, "The pool manager holds 12.5% of supply. Liquidity depth was not measured.");
+});
+
+test("scoreUniswapV4Presence: a tiny share reads 'less than 0.1%', never '0%'", () => {
+  const f = scoreUniswapV4Presence({ balanceRaw: "1", totalSupplyRaw: "1000000000000000000" });
+  assert.match(f.detail, /holds less than 0\.1% of supply/);
+});
+
+test("scoreUniswapV4Presence: positive balance, unknown supply -> still reported, without a share", () => {
+  for (const totalSupplyRaw of [null, undefined, "0", "not-a-number"]) {
+    const f = scoreUniswapV4Presence({ balanceRaw: "5", totalSupplyRaw });
+    assert.equal(f.title, "Trades on Uniswap v4");
+    assert.doesNotMatch(f.detail, /%/);
+    assert.match(f.detail, /Liquidity depth was not measured/);
+  }
+});
+
+test("scoreUniswapV4Presence: zero balance or a failed read -> no finding at all", () => {
+  for (const balanceRaw of ["0", null, undefined, "", "garbage"]) {
+    assert.equal(scoreUniswapV4Presence({ balanceRaw, totalSupplyRaw: "1000" }), null);
+  }
+  assert.equal(scoreUniswapV4Presence(), null);
+});
+
+test("scoreUniswapV4Presence: never worded as safe or as a pass", () => {
+  const f = scoreUniswapV4Presence({ balanceRaw: "500", totalSupplyRaw: "1000" });
+  assert.doesNotMatch(f.title + " " + f.detail, /safe|pass|healthy|deep liquidity/i);
+});
+
+test("scoreToken: a Uniswap v4 balance adds the neutral finding without changing the level", () => {
+  const now = new Date("2024-06-01T00:00:00Z");
+  const base = {
+    isVerified: true,
+    abi: [{ type: "function", name: "transfer" }],
+    isProxy: false,
+    holders: [
+      { address: "0x1111111111111111111111111111111111111a", valueRaw: "50" },
+      { address: "0x2222222222222222222222222222222222222b", valueRaw: "50" },
+    ],
+    totalSupplyRaw: "10000",
+    holdersCount: 500,
+    createdAtIso: new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000).toISOString(),
+    owner: ZERO_ADDRESS,
+    marketData: {},
+    now,
+  };
+  const without = scoreToken(base);
+  const withV4 = scoreToken({ ...base, poolManagerBalanceRaw: "2500" });
+  assert.equal(withV4.overallLevel, without.overallLevel);
+  const v4 = withV4.findings.find((f) => f.id === "uniswap-v4-pool");
+  assert.ok(v4);
+  assert.match(v4.detail, /holds 25% of supply/);
+  assert.equal(without.findings.some((f) => f.id === "uniswap-v4-pool"), false);
+  // Absent/failed read: the findings list has no null holes.
+  assert.equal(without.findings.every(Boolean), true);
+});
+
+test("scoreToken: a Uniswap v4 balance alone can't lift 'Insufficient data' into a verdict", () => {
+  const { overallLevel } = scoreToken({ now: new Date(), poolManagerBalanceRaw: "1000", totalSupplyRaw: "2000" });
+  assert.equal(overallLevel, "Insufficient data");
 });

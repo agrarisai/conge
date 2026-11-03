@@ -298,9 +298,13 @@ It runs three steps, entirely through the [Worker](#worker) RPC proxy:
   (consistent with a pause, blacklist, or allowlist).
 - Both succeed → **Passed**, "Sell simulation passed" — shown with the
   caveat that this is an indicator, not proof, and cannot detect every
-  trap.
-- No pool found among the top holders → **Info/Unknown**, "No liquidity
-  pool found among top holders, sell could not be simulated".
+  trap. It also says that a transfer into a pool does not represent a
+  Uniswap v4 swap, so for a token that trades on Uniswap v4 a pass does
+  not prove it can be sold there.
+- No pool found among the top holders → **Info/Unknown**, "No V2-style
+  pool found among top holders". The detail says this does not mean the
+  token has no liquidity: Uniswap v4 pools are not found this way (see
+  below).
 - The Worker or the upstream RPC is unreachable → **Info/Unknown**, "Sell
   simulation unknown", never counted as a pass.
 - Specifically **rate-limited** by the shared upstream RPC (`kind:
@@ -313,6 +317,20 @@ It runs three steps, entirely through the [Worker](#worker) RPC proxy:
   minute." — rather than the generic "could not be reached" message
   above, so it reads as an expected, retryable condition rather than a
   bug to chase. Every other "Unknown" reason keeps its own message.
+
+**Uniswap v4.** Uniswap v4 keeps every pool in one singleton contract, the
+PoolManager (`0x8366a39CC670B4001A1121B8F6A443A643e40951` on Robinhood
+Chain, labelled "Uniswap: Pool Manager" on the block explorer). It has no
+`token0()`/`token1()`, so step 2 never recognizes it as a pool, and it may
+not even be among the top 5 holders. So the scan also reads
+`balanceOf(PoolManager)` on the token, in the same JSON-RPC batch as
+`owner()` (no extra HTTP request). If the balance is above zero, a neutral
+**Info** finding says "Trades on Uniswap v4. The pool manager holds X% of
+supply. Liquidity depth was not measured." It is never a pass and never
+counts toward the overall level; it says where the token trades, not how
+deep the liquidity is or whether selling works. A zero balance or a failed
+read adds nothing. The sell simulation itself still only tests V2-style
+pools: a plain transfer into the PoolManager would not be a swap.
 
 Every finding shows a **"How this was checked"** collapsible: which
 holder(s) were used, which pool addresses were detected, and which calls
