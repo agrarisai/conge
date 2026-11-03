@@ -8,7 +8,9 @@ failure — see the main [README](../README.md#troubleshooting-network-connectiv
 This Worker sits in front of it on Cloudflare's edge instead.
 
 It is a single file (`index.js`), no dependencies, no build step, no
-secrets, no KV/D1, and it never logs request bodies.
+secrets, no KV/D1, and it never logs request bodies. The only thing it
+keeps is a short-lived cache of public chain data (see
+[Caching](#caching-and-stale-if-error)) — nothing about visitors.
 
 ## What it does and doesn't do
 
@@ -45,6 +47,77 @@ secrets, no KV/D1, and it never logs request bodies.
   shared upstream RPC.
 - It never holds funds, signs anything, or writes any state — the
   allowed methods are all reads.
+
+## Caching and stale-if-error
+
+The shared upstream RPC rate-limits (`429`) under bursts, and scanning
+the same token twice used to repeat every upstream call. The Worker now
+caches **each call on its own** in Cloudflare's edge cache (the Cache
+API):
+
+| Method | Fresh for | Notes |
+|---|---|---|
+| `eth_call` | 60 seconds | contract state can change any block |
+| `eth_getCode` | 10 minutes | code almost never changes |
+| `eth_chainId` | 1 hour | never changes |
+| `eth_blockNumber` | not cached | always live |
+
+- **Per call, not per batch.** In a batch, cached calls are answered
+  straight from the cache and only the rest are sent upstream, then
+  everything is put back in the caller's original order with the caller's
+  own `id`s.
+- **Identical calls are merged.** If one request contains the same call
+  twice (same method, contract, `from`, call data and state override —
+  letter case doesn't matter), it's sent upstream once and the answer is
+  copied to both.
+- **Only successes are cached.** A JSON-RPC error (e.g. a revert), a
+  `429`/`5xx`, a timeout or any other upstream failure is never stored.
+- **Stale-if-error.** If the upstream still fails after its retries, each
+  call that needed it gets its cached answer if one is **at most 10
+  minutes old**, and the response is marked `X-Conge-Cache: stale`. Stale
+  data is never returned without that header. *Trade-off:* during an
+  upstream outage a visitor may see a result up to 10 minutes old instead
+  of "Unknown" for that check; on a read-only scanner, slightly old public
+  data is more useful than nothing, and the header keeps it detectable.
+- **One failure never hides another answer** (opt-in: the page posts to
+  `/?partial=1`). When the upstream fails but
+  some calls in the request were answered (fresh from the cache, or
+  stale), the response is still `200`: the answered calls get their
+  results, and each call that couldn't be answered gets its own JSON-RPC
+  error — `{"code": -32005, "message": "Upstream RPC request failed: …",
+  "data": {"kind": "upstream-rate-limited"}}` (or `-32603` with kind
+  `upstream-unreachable` for any other upstream failure). Only when no
+  call at all has an answer is the whole request failed with `502`,
+  exactly as before. The site treats such a per-call error as "the RPC
+  was busy", never as a revert: owner() and the Uniswap v4 balance keep
+  whichever succeeded, while the sell simulation treats the whole batch
+  as not completed, so a busy RPC can never look like "selling is
+  blocked". Without `?partial=1` (an older copy of the page), a request
+  that can't be fully answered fails with `502` as before (stale-if-error
+  still applies when every call has a fallback), so an older page never
+  sees an error it could misread. It's a query parameter, not a header,
+  so the CORS preflight is unchanged and the page and the Worker can be
+  updated in either order.
+- **Response header.** Every `POST /` answer carries `X-Conge-Cache`:
+  `hit` (all from cache), `partial`, `miss`, `stale`, or `bypass`
+  (nothing cacheable, e.g. only `eth_blockNumber`). It's exposed to the
+  browser via `Access-Control-Expose-Headers`.
+- **What's stored, privacy-wise.** Only the `result` of a successful call,
+  under a key that is a SHA-256 hash of the method and its call data —
+  all public chain data. Nothing about the visitor (IP, origin, headers,
+  timing) is part of the key or the entry, nothing is logged, and entries
+  expire by themselves (kept at most 10 minutes, 1 hour for
+  `eth_chainId`).
+- **Custom domain only.** The Cache API only works on a custom domain,
+  so caching is active on `rpc.conge.site`. On the `workers.dev` address
+  it stores nothing and every call goes upstream (merging identical calls
+  still works). Each Cloudflare data center has its own cache, so a
+  visitor in another region may not get a hit.
+
+**Retry jitter.** Each retry delay (`400ms, 800ms, 1600ms, 3200ms`) is
+randomized by ±25%, so visitors rate-limited at the same moment don't all
+retry in lockstep. The 8 second overall deadline is unchanged; the
+deadline check uses the jittered delay.
 
 ## Deploying
 
@@ -130,6 +203,18 @@ curl -i -X POST https://rpc.conge.site/ \
 ```
 
 A batch works the same way, as a JSON array of up to 10 request objects.
+
+To see the cache work, send the same `eth_call` twice within a minute and
+look at the `x-conge-cache` response header: `miss` the first time, `hit`
+the second.
+
+```bash
+curl -s -o /dev/null -D - -X POST https://rpc.conge.site/ \
+  -H "Origin: https://conge.site" \
+  -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168","data":"0x18160ddd"},"latest"]}' \
+  | grep -i x-conge-cache
+```
 
 ## Abuse protection and rate limiting
 
@@ -230,8 +315,9 @@ unaffected, because they don't go through this Worker.
 
 ## Testing
 
-Pure validation and CORS logic (no network, no Workers runtime needed) is
-unit-tested with Node's built-in test runner:
+Validation, CORS, retry/jitter and caching logic (no network, no Workers
+runtime needed — the upstream and the Cache API are replaced by in-memory
+stand-ins) are unit-tested with Node's built-in test runner:
 
 ```bash
 node --test worker/tests/worker.test.js

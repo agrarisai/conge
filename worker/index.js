@@ -12,7 +12,10 @@
 //   - "latest" block reads only (no historical state, no writes — writes
 //     aren't possible via eth_call/eth_getCode/eth_chainId/eth_blockNumber
 //     anyway, but this keeps the intent explicit).
-// It holds no secrets, no state (no KV/D1), and never logs request bodies.
+// It holds no secrets and no database (no KV/D1), and never logs request
+// bodies. The only thing it keeps is a short-lived edge cache of public
+// chain data — successful read results keyed by a hash of the call — see
+// "Per-call response cache" below.
 //
 // Pure functions (no network, no Workers-runtime globals) are exported by
 // name so tests/worker.test.js can exercise the validation/CORS logic
@@ -52,6 +55,19 @@ export const RETRYABLE_UPSTREAM_STATUSES = new Set([429, 503]);
 export const MAX_UPSTREAM_ATTEMPTS = 5;
 export const RETRY_DELAYS_MS = [400, 800, 1600, 3200]; // delay before attempts 2, 3, 4, 5 respectively
 
+// Each backoff delay is randomized by up to ±25% so that several visitors
+// rate-limited at the same moment don't all retry in lockstep and hit the
+// upstream together again. The 8s deadline check below uses the jittered
+// delay, so the overall budget is unchanged.
+export const RETRY_JITTER = 0.25;
+
+// `random` returns a number in [0, 1); 0.5 means no jitter. Injectable so
+// tests can pin it.
+export function jitteredDelay(baseMs, random = Math.random) {
+  const factor = 1 + (random() * 2 - 1) * RETRY_JITTER;
+  return Math.round(baseMs * factor);
+}
+
 // Pure decision for whether callUpstream should retry after getting
 // `status` back on `attempt` (1-based), given `elapsedMs` already spent
 // since the request started. No network, no timers — fully
@@ -61,14 +77,14 @@ export const RETRY_DELAYS_MS = [400, 800, 1600, 3200]; // delay before attempts 
 // "time-budget" } — `reason` is only meaningful when `retry` is false and
 // `status` was itself retryable; callers use it to word the final 502
 // correctly (out of attempts vs. stopped early to respect the timeout).
-export function decideUpstreamRetry(status, attempt, elapsedMs) {
+export function decideUpstreamRetry(status, attempt, elapsedMs, random = Math.random) {
   if (!RETRYABLE_UPSTREAM_STATUSES.has(status)) {
     return { retry: false, reason: "not-retryable" };
   }
   if (attempt >= MAX_UPSTREAM_ATTEMPTS) {
     return { retry: false, reason: "exhausted-attempts" };
   }
-  const nextDelay = RETRY_DELAYS_MS[attempt - 1];
+  const nextDelay = jitteredDelay(RETRY_DELAYS_MS[attempt - 1], random);
   if (elapsedMs + nextDelay >= UPSTREAM_TIMEOUT_MS) {
     return { retry: false, reason: "time-budget" };
   }
@@ -111,6 +127,7 @@ export function buildCorsHeaders(origin) {
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Max-Age": "86400",
+    "Access-Control-Expose-Headers": "X-Conge-Cache",
     Vary: "Origin",
   };
 }
@@ -235,6 +252,145 @@ export function parseBatch(parsedBody) {
   return { ok: true, isBatch, items };
 }
 
+// --- Per-call response cache ------------------------------------------------
+//
+// Identical read-only calls (the same token scanned twice, or the same
+// call made by two visitors) are answered from Cloudflare's edge cache
+// instead of the shared, rate-limited upstream. Each call in a batch is
+// cached on its own, so a batch that's half cached only sends the other
+// half upstream.
+//
+// What's stored: only the JSON-RPC `result` of a successful call — never
+// an error, never a 429/5xx — under a key that is a SHA-256 hash of the
+// method and its call data (contract address, optional `from`, calldata,
+// optional state override). That's all public chain data; nothing about
+// the visitor (no IP, no origin, no headers) is part of the key or the
+// entry. Entries expire on their own (see CACHE_STORE_SECONDS).
+//
+// The Cache API only works on a custom domain (rpc.conge.site); on the
+// workers.dev address it silently stores nothing, and every call simply
+// goes upstream as before. Each Cloudflare data center has its own cache.
+
+export const CACHE_TTL_MS = {
+  eth_call: 60_000, // contract state can change any block, so keep it short
+  eth_getCode: 10 * 60_000, // code almost never changes
+  eth_chainId: 60 * 60_000, // never changes
+  // eth_blockNumber: not cached — it's the one value that should be live.
+};
+
+// Stale-if-error: when the upstream still fails after every retry, a
+// cached result up to this old is returned instead of an error, marked
+// with the response header X-Conge-Cache: stale. Trade-off: a visitor may
+// see data up to 10 minutes old during an upstream outage, instead of
+// "Unknown" for that check. Stale data is never served without the header.
+export const STALE_IF_ERROR_MAX_AGE_MS = 10 * 60_000;
+
+// How long an entry is kept: long enough to serve as a stale fallback,
+// and at least its own TTL.
+function cacheStoreSeconds(method) {
+  return Math.ceil(Math.max(CACHE_TTL_MS[method], STALE_IF_ERROR_MAX_AGE_MS) / 1000);
+}
+
+export const CACHE_HEADER = "X-Conge-Cache";
+
+// Pages that understand per-call "upstream failed" errors (see
+// resolveCalls) POST to "/?partial=1". Without it, a partly answerable
+// request fails as a whole (502), as it always did — an older page would
+// otherwise read such an error as a revert, e.g. a busy RPC as "selling is
+// blocked". A query parameter rather than a header on purpose: a new
+// header would change the CORS preflight, and an older Worker would then
+// reject every request from a newer page; an older Worker simply ignores
+// the query string.
+export const ACCEPT_PARTIAL_PARAM = "partial";
+const CACHED_AT_HEADER = "X-Conge-Cached-At";
+
+// Stable JSON: object keys sorted (recursively), strings lowercased — hex
+// addresses/data are case-insensitive, so "0xAbC" and "0xabc" share a key.
+export function canonicalize(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k.toLowerCase())}:${canonicalize(value[k])}`).join(",")}}`;
+  }
+  if (typeof value === "string") return JSON.stringify(value.toLowerCase());
+  return JSON.stringify(value ?? null);
+}
+
+// The normalized identity of an already-validated request — two requests
+// with the same identity always get the same answer from the chain at the
+// same moment. Used for dedupe (every method) and, where the method is
+// cacheable, as the input to the cache key. The JSON-RPC id is not part of
+// it.
+export function callIdentity(request) {
+  const { method, params } = request;
+  if (method === "eth_call") {
+    const [call, , override] = params;
+    return canonicalize({
+      method,
+      to: call.to,
+      from: call.from ?? null,
+      data: call.data ?? call.input ?? "0x",
+      override: override ?? null,
+    });
+  }
+  if (method === "eth_getCode") return canonicalize({ method, address: params[0] });
+  return canonicalize({ method });
+}
+
+export function isCacheableMethod(method) {
+  return Object.hasOwn(CACHE_TTL_MS, method);
+}
+
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// A GET Request on this Worker's own hostname (the Cache API keys on
+// URLs). Requests from outside to this path just get the normal 404.
+export async function cacheKeyRequest(identity, requestUrl) {
+  const url = new URL(`/__cache/v1/${await sha256Hex(identity)}`, requestUrl);
+  return new Request(url.toString(), { method: "GET" });
+}
+
+// "fresh" (serve it), "stale" (only as a stale-if-error fallback) or
+// "expired" (ignore), from the entry's age.
+export function classifyCacheAge(cachedAtMs, nowMs, ttlMs) {
+  const age = nowMs - cachedAtMs;
+  if (!Number.isFinite(age) || age < 0) return "expired";
+  if (age <= ttlMs) return "fresh";
+  if (age <= STALE_IF_ERROR_MAX_AGE_MS) return "stale";
+  return "expired";
+}
+
+function getEdgeCache() {
+  return globalThis.caches?.default ?? null;
+}
+
+async function readCacheEntry(cache, keyRequest) {
+  try {
+    const hit = await cache.match(keyRequest);
+    if (!hit) return null;
+    const cachedAt = Number(hit.headers.get(CACHED_AT_HEADER));
+    const body = await hit.json();
+    if (!body || !Object.hasOwn(body, "result")) return null;
+    return { cachedAt, result: body.result };
+  } catch {
+    return null; // a cache problem is never a request failure
+  }
+}
+
+function writeCacheEntry(cache, keyRequest, method, result, nowMs) {
+  const response = new Response(JSON.stringify({ result }), {
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": `public, max-age=${cacheStoreSeconds(method)}`,
+      [CACHED_AT_HEADER]: String(nowMs),
+    },
+  });
+  return cache.put(keyRequest, response).catch(() => {});
+}
+
 // --- JSON response helper -------------------------------------------------
 
 function jsonResponse(body, status, extraHeaders) {
@@ -331,7 +487,7 @@ function handlePreflight(origin) {
   return new Response(null, { status: 204, headers: cors });
 }
 
-async function handleRpc(request, origin) {
+async function handleRpc(request, origin, ctx) {
   const cors = buildCorsHeaders(origin);
   if (!cors) {
     return jsonResponse({ error: "Origin not allowed" }, 403);
@@ -359,36 +515,149 @@ async function handleRpc(request, origin) {
     return jsonResponse(batch.error, 400, cors);
   }
 
-  const validated = batch.items.map((item) => ({ item, result: validateRequest(item) }));
-  const toForward = validated.filter((v) => v.result.ok).map((v) => v.result.request);
+  const validated = batch.items.map((item) => validateRequest(item));
+  const outcome = await resolveCalls(
+    validated.filter((v) => v.ok).map((v) => v.request),
+    request.url,
+    ctx,
+    Date.now(),
+    { acceptPartial: new URL(request.url).searchParams.get(ACCEPT_PARTIAL_PARAM) === "1" },
+  );
 
-  const resultById = new Map();
-  if (toForward.length > 0) {
-    const upstream = await callUpstream(toForward);
+  if (!outcome.ok) {
+    // A single failed upstream call fails the whole HTTP response, even
+    // inside a batch — the upstream is unreachable/erroring, not any one
+    // request in particular. `kind` is only present for a rate-limited
+    // failure that survived every retry (see callUpstream) — callers use
+    // it to show a specific "busy, try again" message instead of a
+    // generic connectivity error.
+    const body = { error: "Upstream RPC request failed", detail: outcome.detail };
+    if (outcome.kind) body.kind = outcome.kind;
+    return jsonResponse(body, 502, cors);
+  }
+
+  // Back in the caller's original order, each with its own original id.
+  let next = 0;
+  const finalResults = validated.map((v) => (v.ok ? outcome.answers[next++] : v.error));
+
+  return jsonResponse(batch.isBatch ? finalResults : finalResults[0], 200, {
+    ...cors,
+    [CACHE_HEADER]: outcome.cacheStatus,
+  });
+}
+
+// The per-call error for a call the upstream couldn't answer, used when
+// other calls in the same request do have an answer. `data.kind` matches
+// the 502 body's `kind`, so the page can tell "rate limited" from other
+// failures for this one call. -32005 is the conventional "limit exceeded"
+// code; any other upstream failure is an internal error (-32603).
+export function upstreamCallError(upstream) {
+  const kind = upstream.kind ?? "upstream-unreachable";
+  return {
+    code: kind === "upstream-rate-limited" ? -32005 : -32603,
+    message: `Upstream RPC request failed: ${upstream.detail}`,
+    data: { kind },
+  };
+}
+
+// Answers a list of already-validated requests, in order, using the cache
+// where it can:
+//   1. Identical calls (same identity — see callIdentity) are merged, so
+//      each distinct call is looked up/sent once.
+//   2. Fresh cache hits are answered directly.
+//   3. Everything else goes upstream in one batch, with fresh internal ids
+//      (so callers' ids, even duplicate ones, can't collide), and each
+//      successful result is cached.
+//   4. If the upstream fails after its retries, each call that needed it
+//      gets its cached result if one is at most STALE_IF_ERROR_MAX_AGE_MS
+//      old (the response is then marked "stale"). With `acceptPartial`
+//      (the page posted to "/?partial=1"), a call with no such
+//      fallback gets its own JSON-RPC error saying the upstream failed
+//      (see upstreamCallError), so one failed call never hides another
+//      call's answer; only when no call at all has an answer is the whole
+//      request failed (502). Without it, every call needs a fallback or
+//      the whole request fails (502), as before.
+// Returns { ok: true, answers, cacheStatus } — answers carry each
+// request's own id; cacheStatus is "hit" (all from cache), "miss" (none),
+// "partial", "stale", or "bypass" (nothing cacheable) — or the upstream
+// failure { ok: false, detail, kind? }.
+export async function resolveCalls(requests, requestUrl, ctx, now = Date.now(), { acceptPartial = false } = {}) {
+  const cache = getEdgeCache();
+  const unique = new Map(); // identity -> { method, request, result?, stale?, keyRequest? }
+  for (const req of requests) {
+    const identity = callIdentity(req);
+    if (!unique.has(identity)) unique.set(identity, { method: req.method, request: req });
+  }
+
+  let cacheable = 0;
+  let hits = 0;
+  await Promise.all(
+    [...unique.values()].map(async (entry) => {
+      if (!cache || !isCacheableMethod(entry.method)) return;
+      cacheable++;
+      entry.keyRequest = await cacheKeyRequest(callIdentity(entry.request), requestUrl);
+      const cached = await readCacheEntry(cache, entry.keyRequest);
+      if (!cached) return;
+      const age = classifyCacheAge(cached.cachedAt, now, CACHE_TTL_MS[entry.method]);
+      if (age === "fresh") {
+        entry.answer = { result: cached.result };
+        hits++;
+      } else if (age === "stale") {
+        entry.stale = { result: cached.result };
+      }
+    }),
+  );
+
+  const misses = [...unique.values()].filter((e) => !e.answer);
+  let cacheStatus = cacheable === 0 ? "bypass" : hits === 0 ? "miss" : misses.length === 0 ? "hit" : "partial";
+
+  if (misses.length > 0) {
+    const outgoing = misses.map((e, i) => ({ ...e.request, id: i + 1 }));
+    const upstream = await callUpstream(outgoing);
+
     if (!upstream.ok) {
-      // A single failed upstream call fails the whole HTTP response, even
-      // inside a batch — the upstream is unreachable/erroring, not any one
-      // request in particular. `kind` is only present for a rate-limited
-      // failure that survived every retry (see callUpstream) — callers use
-      // it to show a specific "busy, try again" message instead of a
-      // generic connectivity error.
-      const body = { error: "Upstream RPC request failed", detail: upstream.detail };
-      if (upstream.kind) body.kind = upstream.kind;
-      return jsonResponse(body, 502, cors);
-    }
-    const upstreamResults = Array.isArray(upstream.body) ? upstream.body : [upstream.body];
-    for (const r of upstreamResults) {
-      if (r && typeof r === "object") resultById.set(JSON.stringify(r.id ?? null), r);
+      const answeredElsewhere = hits > 0 || misses.some((e) => e.stale);
+      if (!answeredElsewhere) return upstream;
+      if (!acceptPartial && !misses.every((e) => e.stale)) return upstream;
+      let staleUsed = false;
+      for (const e of misses) {
+        if (e.stale) {
+          e.answer = e.stale;
+          staleUsed = true;
+        } else {
+          e.answer = { error: upstreamCallError(upstream) };
+        }
+      }
+      cacheStatus = staleUsed ? "stale" : "partial";
+    } else {
+      const byId = new Map();
+      for (const r of Array.isArray(upstream.body) ? upstream.body : [upstream.body]) {
+        if (r && typeof r === "object") byId.set(r.id, r);
+      }
+      const writes = [];
+      misses.forEach((e, i) => {
+        const r = byId.get(i + 1);
+        if (!r) {
+          e.answer = { error: { code: -32603, message: "Upstream did not return a result for this request" } };
+          return;
+        }
+        if (r.error || !Object.hasOwn(r, "result")) {
+          e.answer = { error: r.error ?? { code: -32603, message: "Upstream returned neither a result nor an error" } };
+          return; // errors are never cached
+        }
+        e.answer = { result: r.result };
+        if (e.keyRequest) writes.push(writeCacheEntry(cache, e.keyRequest, e.method, r.result, now));
+      });
+      if (writes.length) {
+        const all = Promise.all(writes);
+        if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(all);
+        else await all;
+      }
     }
   }
 
-  const finalResults = validated.map(({ result }) => {
-    if (!result.ok) return result.error;
-    const key = JSON.stringify(result.request.id);
-    return resultById.get(key) ?? jsonRpcError(result.request.id, -32603, "Upstream did not return a result for this request");
-  });
-
-  return jsonResponse(batch.isBatch ? finalResults : finalResults[0], 200, cors);
+  const answers = requests.map((req) => ({ jsonrpc: "2.0", id: req.id, ...unique.get(callIdentity(req)).answer }));
+  return { ok: true, answers, cacheStatus };
 }
 
 // GET /health is deliberately NOT origin-restricted: it's meant to be
@@ -456,7 +725,7 @@ async function handleHealth(now = Date.now()) {
 // --- Entry point -----------------------------------------------------------
 
 export default {
-  async fetch(request) {
+  async fetch(request, env, ctx) {
     const origin = request.headers.get("Origin");
     const url = new URL(request.url);
 
@@ -475,7 +744,7 @@ export default {
       if (request.method !== "POST") {
         return jsonResponse({ error: "Method not allowed, use POST" }, 405, buildCorsHeaders(origin) || undefined);
       }
-      return handleRpc(request, origin);
+      return handleRpc(request, origin, ctx);
     }
 
     return jsonResponse({ error: "Not found" }, 404);

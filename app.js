@@ -26,7 +26,7 @@ import {
   THRESHOLDS,
   lacksTokenMetadata,
   classifyScanTarget,
-} from "./scoring.js?v=7ff86138c8";
+} from "./scoring.js?v=e8ea68ee35";
 
 // Cloudflare Worker RPC proxy (see worker/) — a thin, read-only JSON-RPC
 // proxy for rpc.mainnet.chain.robinhood.com, served on the project's own
@@ -40,6 +40,7 @@ import {
 // (chain-ID cross-check, owner(), the sell-simulation honeypot check
 // below); the site works fully with it unreachable too.
 const WORKER_URL = "https://rpc.conge.site";
+const WORKER_BATCH_URL = `${WORKER_URL}/?partial=1`;
 
 // Single source of truth for chain/explorer configuration. The Blockscout
 // API v2 (explorerApiUrl) is the PRIMARY data source for this site — it's
@@ -52,6 +53,16 @@ const CONFIG = {
 };
 
 const FETCH_TIMEOUT_MS = 10_000;
+
+// Worker requests get longer: the Worker itself may spend up to its own
+// 8s upstream deadline retrying a rate-limited RPC (UPSTREAM_TIMEOUT_MS in
+// worker/index.js), and the page must not give up first, or it aborts
+// ("signal is aborted without reason") while the Worker is still working.
+// The extra 4s covers the round trip, Worker start-up and its cache
+// lookups on a slow mobile connection. tests/timeouts.test.js keeps this
+// above the Worker's deadline.
+const WORKER_UPSTREAM_DEADLINE_MS = 8_000;
+const WORKER_FETCH_TIMEOUT_MS = WORKER_UPSTREAM_DEADLINE_MS + 4_000;
 const BLOCKSCOUT_SOURCE = "Blockscout API v2";
 const WORKER_SOURCE = "Worker";
 
@@ -94,11 +105,13 @@ function hasRateLimitedDiagnostic(diagnostics) {
 // never more than one extra attempt, and the honest "Unknown" outcome and
 // its real diagnostics are preserved either way, never hidden). A
 // cancelled scan (`signal` aborted) never retries.
-async function withWholeCheckRateLimitRetry(runCheck, isRateLimited, signal) {
+// `combine(first, second)` picks the result to return after a retry —
+// by default the retry's own.
+async function withWholeCheckRateLimitRetry(runCheck, isRateLimited, signal, combine = (first, second) => second) {
   const first = await runCheck();
   if (!isRateLimited(first) || signal?.aborted) return first;
   await sleep(WHOLE_CHECK_RATE_LIMIT_RETRY_DELAY_MS, signal);
-  return runCheck();
+  return combine(first, await runCheck());
 }
 
 // Resolves after `ms`, or straight away (clearing its timer) once `signal`
@@ -344,13 +357,22 @@ function createScanTimer(address) {
 //
 // `options.signal` (a scan's cancel signal) aborts the request too; that
 // failure is reported as kind "cancelled" rather than "timeout".
+// `options.timeoutMs` overrides FETCH_TIMEOUT_MS (Worker calls use
+// WORKER_FETCH_TIMEOUT_MS).
 async function fetchRaw(url, options, label) {
-  const diagnostic = { url, label, pageOrigin: window.location.origin };
-  const { signal: cancelSignal, ...fetchOptions } = options;
+  const { signal: cancelSignal, timeoutMs = FETCH_TIMEOUT_MS, ...fetchOptions } = options;
+  const diagnostic = { url, label, pageOrigin: window.location.origin, timeoutMs };
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  const onCancel = () => controller.abort();
-  if (cancelSignal?.aborted) controller.abort();
+  // An explicit reason, so Technical details read "No response within
+  // 12s" instead of the browser's bare "signal is aborted without reason".
+  // Browsers that ignore the reason still reject with an AbortError, which
+  // is classified the same way.
+  const timeoutId = setTimeout(
+    () => controller.abort(new DOMException(`No response within ${timeoutMs / 1000}s (the page stopped waiting)`, "TimeoutError")),
+    timeoutMs,
+  );
+  const onCancel = () => controller.abort(new DOMException("The scan was cancelled", "AbortError"));
+  if (cancelSignal?.aborted) onCancel();
   else cancelSignal?.addEventListener("abort", onCancel, { once: true });
   const abortKind = () => (cancelSignal?.aborted ? "cancelled" : "timeout");
 
@@ -361,7 +383,7 @@ async function fetchRaw(url, options, label) {
     } catch (error) {
       diagnostic.errorName = error.name;
       diagnostic.errorMessage = error.message;
-      diagnostic.kind = error.name === "AbortError" ? abortKind() : "network-or-cors";
+      diagnostic.kind = error.name === "AbortError" || error.name === "TimeoutError" ? abortKind() : "network-or-cors";
       return { ok: false, diagnostic };
     }
 
@@ -379,7 +401,7 @@ async function fetchRaw(url, options, label) {
     } catch (error) {
       diagnostic.errorName = error.name;
       diagnostic.errorMessage = error.message;
-      diagnostic.kind = error.name === "AbortError" ? abortKind() : "network-or-cors";
+      diagnostic.kind = error.name === "AbortError" || error.name === "TimeoutError" ? abortKind() : "network-or-cors";
       return { ok: false, diagnostic };
     }
     diagnostic.bodySnippet = rawText.slice(0, 300);
@@ -465,6 +487,7 @@ async function probeWorker() {
         { jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] },
         { jsonrpc: "2.0", id: 2, method: "eth_blockNumber", params: [] },
       ]),
+      timeoutMs: WORKER_FETCH_TIMEOUT_MS,
     },
     `${WORKER_SOURCE} (secondary) — eth_chainId / eth_blockNumber`,
   );
@@ -530,7 +553,18 @@ async function probeWorker() {
 // a deliberately different failure mode from a per-call revert, since the
 // honeypot check needs to tell "the Worker is down" (Unknown) apart from
 // "this specific call reverted" (a real, informative result).
-async function callWorkerBatch(calls, label, signal) {
+// When the Worker could answer some calls but the upstream failed for
+// others, the failed ones come back as their own JSON-RPC error with
+// error.data.kind "upstream-rate-limited" / "upstream-unreachable" (see
+// upstreamCallError in worker/index.js). Those aren't answers about the
+// contract (a revert is), so by default any such call fails the whole
+// batch, exactly like a 502 — the sell simulation must never read "the
+// RPC was busy" as "this transfer reverted". Callers whose calls are
+// independent of each other (owner() + balanceOf) pass allowPartial to
+// keep whatever did succeed.
+const UPSTREAM_FAILURE_KINDS = new Set(["upstream-rate-limited", "upstream-unreachable"]);
+
+async function callWorkerBatch(calls, label, signal, { allowPartial = false } = {}) {
   const requests = calls.map((call, i) => ({
     jsonrpc: "2.0",
     id: i + 1,
@@ -541,13 +575,17 @@ async function callWorkerBatch(calls, label, signal) {
     ],
   }));
 
+  // "?partial=1" lets the Worker answer what it can when the upstream fails
+  // for only some calls — this page reads those per-call errors (see
+  // UPSTREAM_FAILURE_KINDS above). An older Worker ignores it.
   const raw = await fetchRaw(
-    WORKER_URL,
+    WORKER_BATCH_URL,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requests.length === 1 ? requests[0] : requests),
       signal,
+      timeoutMs: WORKER_FETCH_TIMEOUT_MS,
     },
     label || `${WORKER_SOURCE} — eth_call batch`,
   );
@@ -588,15 +626,28 @@ async function callWorkerBatch(calls, label, signal) {
     }
     if (entry.error) {
       const errorMessage = entry.error.message || "Call error.";
+      const upstreamKind = UPSTREAM_FAILURE_KINDS.has(entry.error.data?.kind) ? entry.error.data.kind : null;
       return {
         ok: false,
         result: null,
         errorMessage,
-        diagnostic: { ...diagnostic, kind: "json-rpc-error", errorName: "JSONRPCError", errorMessage, errorCode: entry.error.code },
+        upstreamFailed: Boolean(upstreamKind),
+        diagnostic: {
+          ...diagnostic,
+          kind: upstreamKind ?? "json-rpc-error",
+          errorName: "JSONRPCError",
+          errorMessage,
+          errorCode: entry.error.code,
+        },
       };
     }
     return { ok: true, result: entry.result, errorMessage: null, diagnostic: null };
   });
+
+  const upstreamFailure = results.find((r) => r.upstreamFailed);
+  if (upstreamFailure && !allowPartial) {
+    return { ok: false, diagnostic: upstreamFailure.diagnostic };
+  }
 
   return { ok: true, results, diagnostic };
 }
@@ -615,7 +666,7 @@ async function callWorkerBatch(calls, label, signal) {
 // extra retry of that same batch here before giving up. This is what
 // keeps a normal scan (owner lookup, sell-simulation) from failing
 // outright over what's usually a brief, temporary rate limit.
-async function callWorkerChunked(calls, label, signal) {
+async function callWorkerChunked(calls, label, signal, batchOptions) {
   const allResults = [];
   const diagnostics = [];
   for (let i = 0; i < calls.length; i += WORKER_MAX_BATCH_SIZE) {
@@ -623,10 +674,10 @@ async function callWorkerChunked(calls, label, signal) {
       await sleep(CHUNK_DELAY_MS, signal);
     }
     const chunk = calls.slice(i, i + WORKER_MAX_BATCH_SIZE);
-    let outcome = await callWorkerBatch(chunk, label, signal);
+    let outcome = await callWorkerBatch(chunk, label, signal, batchOptions);
     if (!outcome.ok && outcome.diagnostic.kind === "upstream-rate-limited") {
       await sleep(RATE_LIMIT_RETRY_DELAY_MS, signal);
-      outcome = await callWorkerBatch(chunk, label, signal);
+      outcome = await callWorkerBatch(chunk, label, signal, batchOptions);
     }
     diagnostics.push(outcome.diagnostic);
     if (!outcome.ok) {
@@ -647,8 +698,11 @@ async function callWorkerChunked(calls, label, signal) {
 // diagnostics for the "Owner unknown" finding's Technical details panel,
 // so "the Worker is down" and "this contract has no owner()" both keep
 // their real underlying error instead of collapsing into a bare "Unknown".
-// poolManagerBalanceRaw is a base-10 string, or null if that call failed
-// (each call in the batch succeeds or fails on its own).
+// poolManagerBalanceRaw is a base-10 string, or null if that call failed,
+// with its own balanceDiagnostics. The two are separate calls in one
+// batch (one HTTP request) and each succeeds or fails on its own — the
+// Worker can answer one from its cache even when the upstream fails for
+// the other (allowPartial), so one failure never hides the other result.
 async function fetchOwnerViaWorker(tokenAddress, signal) {
   const outcome = await callWorkerChunked(
     [
@@ -657,12 +711,42 @@ async function fetchOwnerViaWorker(tokenAddress, signal) {
     ],
     `${WORKER_SOURCE} — eth_call owner() + balanceOf(Uniswap v4 PoolManager)`,
     signal,
+    { allowPartial: true },
   );
-  if (!outcome.ok) return { owner: null, diagnostics: outcome.diagnostics, poolManagerBalanceRaw: null };
+  if (!outcome.ok) {
+    return { owner: null, diagnostics: outcome.diagnostics, poolManagerBalanceRaw: null, balanceDiagnostics: outcome.diagnostics };
+  }
   const [ownerResult, balanceResult] = outcome.results;
-  const poolManagerBalanceRaw = balanceResult.ok ? decodeUintResult(balanceResult.result) : null;
-  if (!ownerResult.ok) return { owner: null, diagnostics: [ownerResult.diagnostic], poolManagerBalanceRaw };
-  return { owner: decodeAddressResult(ownerResult.result), diagnostics: null, poolManagerBalanceRaw };
+  return {
+    owner: ownerResult.ok ? decodeAddressResult(ownerResult.result) : null,
+    diagnostics: ownerResult.ok ? null : [ownerResult.diagnostic],
+    poolManagerBalanceRaw: balanceResult.ok ? decodeUintResult(balanceResult.result) : null,
+    balanceDiagnostics: balanceResult.ok ? null : [balanceResult.diagnostic],
+  };
+}
+
+// True if either half of fetchOwnerViaWorker's result is missing because
+// the RPC was rate limited — worth one more whole-check attempt.
+function ownerOutcomeRateLimited(r) {
+  return (
+    (r.owner === null && hasRateLimitedDiagnostic(r.diagnostics)) ||
+    (r.poolManagerBalanceRaw === null && hasRateLimitedDiagnostic(r.balanceDiagnostics))
+  );
+}
+
+// Keeps whatever each attempt got: a value read on the first attempt
+// isn't lost because the retry failed for it (the retry is usually
+// answered from the Worker's cache for anything already read).
+function mergeOwnerOutcomes(first, second) {
+  const ownerFrom = second.owner !== null ? second : first.owner !== null ? first : second;
+  const balanceFrom =
+    second.poolManagerBalanceRaw !== null ? second : first.poolManagerBalanceRaw !== null ? first : second;
+  return {
+    owner: ownerFrom.owner,
+    diagnostics: ownerFrom.diagnostics,
+    poolManagerBalanceRaw: balanceFrom.poolManagerBalanceRaw,
+    balanceDiagnostics: balanceFrom.balanceDiagnostics,
+  };
 }
 
 // --- Sell-simulation honeypot check ---------------------------------------
@@ -785,15 +869,17 @@ function friendlyMessageFor(diagnostic, sourceLabel) {
         "for security — see Technical details below."
       );
     case "timeout":
-      return `${sourceLabel} did not respond within ${FETCH_TIMEOUT_MS / 1000}s. It may be overloaded or unreachable from your network.`;
+      return `${sourceLabel} did not respond within ${(diagnostic.timeoutMs ?? FETCH_TIMEOUT_MS) / 1000}s. It may be overloaded or unreachable from your network.`;
     case "origin-rejected":
       return `${sourceLabel} rejected this request (HTTP 403): this page's origin isn't on its allow-list. This is a validation rejection, not a CORS/preflight failure — the request did reach the Worker.`;
     case "validation-rejected":
       return `${sourceLabel} rejected this request as malformed or too large (HTTP ${diagnostic.httpStatus}): ${diagnostic.errorMessage}. This is a validation rejection, not a CORS/preflight failure — the request did reach the Worker.`;
+    // Either a whole-request 502, or (inside an otherwise answered batch)
+    // this one call's own error — only the former says "HTTP 502".
     case "upstream-unreachable":
-      return `${sourceLabel} reached the upstream RPC and that call failed (HTTP 502): ${diagnostic.errorMessage}`;
+      return `${sourceLabel} reached the upstream RPC and that call failed${diagnostic.httpStatus === 502 ? " (HTTP 502)" : ""}: ${diagnostic.errorMessage}`;
     case "upstream-rate-limited":
-      return `The RPC is busy right now — the Worker already retried a few times (HTTP 502). Please try again in a moment.`;
+      return `The RPC is busy right now — the Worker already retried a few times${diagnostic.httpStatus === 502 ? " (HTTP 502)" : ""}. Please try again in a moment.`;
     case "http":
       if (diagnostic.httpStatus === 429) {
         return `${sourceLabel} is rate-limiting requests (HTTP 429). Please wait a moment and retry.`;
@@ -1010,6 +1096,7 @@ async function testWorkerConnection() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+        timeoutMs: WORKER_FETCH_TIMEOUT_MS,
       },
       "Self-test (a) — POST eth_chainId",
     );
@@ -1029,6 +1116,7 @@ async function testWorkerConnection() {
             "latest",
           ],
         }),
+        timeoutMs: WORKER_FETCH_TIMEOUT_MS,
       },
       `Self-test (b) — POST eth_call with "from" (balanceOf on ${lastScannedTokenAddress ? "the scanned token" : "the probe address"})`,
     );
@@ -2070,8 +2158,9 @@ async function scanToken(rawAddress) {
         "Worker owner() check",
         withWholeCheckRateLimitRetry(
           () => fetchOwnerViaWorker(address, signal),
-          (r) => r.owner === null && hasRateLimitedDiagnostic(r.diagnostics),
+          ownerOutcomeRateLimited,
           signal,
+          mergeOwnerOutcomes,
         ),
       ),
     );

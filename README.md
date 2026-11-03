@@ -882,7 +882,13 @@ that affects scoring has resolved.
 
 None of the Worker rate-limit spacing or retries (`CHUNK_DELAY_MS` and
 friends) apply to Blockscout. Each Blockscout request is a single `fetch`
-with a 10s timeout and no retry.
+with a 10s timeout and no retry. Worker requests wait **12s**
+(`WORKER_FETCH_TIMEOUT_MS`): the Worker itself may spend up to its 8s
+upstream deadline retrying, and the page must not give up first, so it
+allows 4s more for the round trip and the Worker's own overhead.
+`tests/timeouts.test.js` keeps the two in step. A timeout shows in
+Technical details as "No response within 12s (the page stopped
+waiting)".
 
 ## Troubleshooting network connectivity
 
@@ -1045,16 +1051,24 @@ above for why that endpoint can fail from some networks). It:
 - **retries a rate-limited or overloaded upstream call** (HTTP `429`/`503`
   from `rpc.mainnet.chain.robinhood.com` — the RPC has a tight shared
   rate limit, and a full scan's burst of sequential calls can trip it) up
-  to 5 times total, with backoff `400ms, 800ms, 1600ms, 3200ms`, capped
-  to whatever fits within the existing 8s overall timeout — see
-  [Rate limiting](#rate-limiting) below;
+  to 5 times total, with backoff `400ms, 800ms, 1600ms, 3200ms` (each
+  randomized by ±25%), capped to whatever fits within the existing 8s
+  overall timeout — see [Rate limiting](#rate-limiting) below;
+- **caches each successful read on its own** at Cloudflare's edge
+  (`eth_call` 60s, `eth_getCode` 10 min, `eth_chainId` 1 h,
+  `eth_blockNumber` never), merges identical calls within a request, and
+  — only if the upstream still fails after its retries — falls back to a
+  cached answer at most 10 minutes old, marked with the response header
+  `X-Conge-Cache: stale`. Errors are never cached. See
+  [worker/README.md → Caching](./worker/README.md#caching-and-stale-if-error);
 - times out upstream calls after 8s and reports `502` with a real reason
   if the upstream still fails after retries, rather than hanging;
 - exposes `GET /health` as a one-tap, no-CORS diagnostic you can open
   directly in a phone browser to check whether the upstream RPC is
   reachable right now;
-- holds no secrets and no state (no KV, no D1) and never logs request
-  bodies.
+- holds no secrets and no database (no KV, no D1) and never logs request
+  bodies; its only storage is that short-lived cache of public chain data,
+  keyed by a hash of the call — nothing about visitors.
 
 See [`worker/README.md`](./worker/README.md) for how to deploy it via the
 Cloudflare dashboard (no CLI needed) and how to read `/health`. Its pure
@@ -1187,13 +1201,15 @@ of eligible holder × detected pool — and that burst is exactly what can
 trip the limit even when each individual call would have been fine on its
 own. Three layers of resilience handle this, from smallest to largest
 scope, all within the project's existing constraints (no new
-dependencies, no secrets/state, and no more retrying than described here
+dependencies, no secrets or database, and no more retrying than described here
 — the point is to ride out a brief limit, not to hammer the upstream
 harder):
 
 - **In the Worker** (`callUpstream` in `worker/index.js`): a `429`/`503`
   from the upstream is retried up to **5 times total**, with backoff
-  `400ms, 800ms, 1600ms, 3200ms` between attempts — all within the
+  `400ms, 800ms, 1600ms, 3200ms` between attempts, each randomized by
+  ±25% so visitors limited at the same moment don't retry in lockstep —
+  all within the
   existing 8s overall `UPSTREAM_TIMEOUT_MS` budget. Since that backoff
   alone sums to 6s, `callUpstream` also tracks how much of the 8s budget
   is left before starting each delay (the pure `decideUpstreamRetry`
@@ -1210,6 +1226,17 @@ harder):
   details panels) show a specific "the RPC is busy, please try again"
   message instead of a generic connectivity error. Any other upstream
   HTTP error is *not* retried and fails immediately, unchanged.
+- **In the Worker's cache**: a call answered successfully in the last
+  minute (a re-scan of the same token, or two visitors scanning it) is
+  served from Cloudflare's edge cache and never reaches the upstream; in a
+  batch, only the uncached calls go upstream. If the upstream is still
+  rate-limited after every retry, cached answers up to 10 minutes old are
+  returned instead, marked `X-Conge-Cache: stale`, and any call without
+  one gets its own "upstream failed" error rather than failing the
+  others. When `owner()` can't be read because of the RPC itself, the
+  finding says "The network RPC is busy right now. Try rescanning in a
+  minute." (Technical details still show the exact error.) See
+  [worker/README.md → Caching](./worker/README.md#caching-and-stale-if-error).
 - **In `app.js`, reducing the burst itself**: the sell-simulation
   honeypot check now scans only the **top 5** holders for pool detection
   (down from 10) and simulates from at most **2** eligible holders (down
