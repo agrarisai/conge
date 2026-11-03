@@ -1034,8 +1034,11 @@ back to this list.
 
 [`worker/`](./worker) holds a small, dependency-free Cloudflare Worker
 (`worker/index.js`, a single file) that proxies read-only JSON-RPC calls
-to `rpc.mainnet.chain.robinhood.com` — the raw RPC endpoint, which this
-site never calls directly (see
+to `rpc.mainnet.chain.robinhood.com` — or first to an optional private
+node-provider endpoint set as the Cloudflare secret `UPSTREAM_RPC_URL`,
+with the public RPC as fallback (see
+[worker/README.md → Private upstream](./worker/README.md#private-upstream-optional)) —
+the raw RPC endpoint, which this site never calls directly (see
 [Troubleshooting network connectivity](#troubleshooting-network-connectivity)
 above for why that endpoint can fail from some networks). It:
 
@@ -1066,9 +1069,15 @@ above for why that endpoint can fail from some networks). It:
 - exposes `GET /health` as a one-tap, no-CORS diagnostic you can open
   directly in a phone browser to check whether the upstream RPC is
   reachable right now;
-- holds no secrets and no database (no KV, no D1) and never logs request
-  bodies; its only storage is that short-lived cache of public chain data,
-  keyed by a hash of the call — nothing about visitors.
+- holds no database (no KV, no D1) and never logs request bodies; its
+  only storage is that short-lived cache of public chain data, keyed by a
+  hash of the call — nothing about visitors. Its only secret is the
+  optional private upstream URL, kept in Cloudflare and never echoed in a
+  response, header or error. A private provider receives the same public
+  chain calls (contract addresses and call data) as the public RPC would —
+  nothing about visitors;
+- says which upstream answered in the `X-Conge-Upstream` response header
+  (`private`, `public`, `public-fallback` or `none`), never its URL.
 
 See [`worker/README.md`](./worker/README.md) for how to deploy it via the
 Cloudflare dashboard (no CLI needed) and how to read `/health`. Its pure
@@ -1331,8 +1340,10 @@ exact dashboard steps.
 
 - This is a **read-only** tool: it does not connect wallets, request
   signatures, or send transactions.
-- No secrets or API keys are required or stored; both the Blockscout API
-  and the RPC endpoint are public.
+- No secrets or API keys are required; both the Blockscout API and the
+  public RPC endpoint are public. The site itself holds none. The only
+  optional secret is a private RPC URL kept in Cloudflare for the Worker
+  (`UPSTREAM_RPC_URL`), never in this repo and never sent to the browser.
 - Always verify token information independently (e.g. via the block
   explorer) before making any decisions — Conge does not provide
   financial advice.

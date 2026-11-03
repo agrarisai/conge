@@ -24,7 +24,88 @@
 
 // --- Configuration -----------------------------------------------------
 
-const UPSTREAM_RPC = "https://rpc.mainnet.chain.robinhood.com";
+export const PUBLIC_UPSTREAM_RPC = "https://rpc.mainnet.chain.robinhood.com";
+
+// Optional private upstream: a node provider's endpoint, whose URL carries
+// an API key, set as the Cloudflare secret UPSTREAM_RPC_URL (never in this
+// repo). When it's set to a valid https URL, it's tried first and the
+// public RPC is the fallback; otherwise only the public RPC is used,
+// exactly as before. The URL is never echoed anywhere — not in responses,
+// error details, headers or logs (see redactSecret); responses only say
+// which kind of upstream answered (UPSTREAM_HEADER).
+export function privateUpstreamUrl(env) {
+  const raw = env?.UPSTREAM_RPC_URL;
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  if (!value || /\s/.test(value)) return null;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || !url.hostname) return null;
+  return url.href;
+}
+
+// Time split when a private upstream is set, inside the same overall
+// UPSTREAM_TIMEOUT_MS (8s) budget: the private upstream gets up to
+// PRIVATE_UPSTREAM_BUDGET_MS, with the normal retries capped to fit, and
+// at least PUBLIC_FALLBACK_RESERVE_MS is always left for one attempt at
+// the public RPC if the private one fails. Without a private upstream the
+// public RPC gets the whole 8s with retries, as before.
+export const PUBLIC_FALLBACK_RESERVE_MS = 2500;
+export const PRIVATE_UPSTREAM_BUDGET_MS = 8000 - PUBLIC_FALLBACK_RESERVE_MS;
+// Below this, a fallback attempt couldn't realistically complete.
+const MIN_FALLBACK_MS = 500;
+
+// Which upstream answered, for the X-Conge-Upstream response header:
+// "private", "public" (no private upstream set), "public-fallback" (the
+// private one failed, the public one was tried), or "none" (everything
+// came from the cache, so no upstream was called).
+export const UPSTREAM_HEADER = "X-Conge-Upstream";
+
+// Every piece of the secret URL worth hiding: the whole URL, host + path,
+// the path and query, any credentials, and each path segment or query
+// value long enough to be a key. Short, common fragments ("v1", "rpc") are
+// left alone so ordinary messages stay readable.
+export function secretFragments(secretUrl) {
+  if (!secretUrl) return [];
+  const url = new URL(secretUrl);
+  const parts = new Set([
+    url.href,
+    url.href.replace(/\/$/, ""),
+    url.host + url.pathname + url.search,
+    url.host,
+    url.username,
+    url.password,
+  ]);
+  if (url.pathname.length > 1) parts.add(url.pathname + url.search);
+  if (url.search.length > 1) parts.add(url.search);
+  for (const segment of url.pathname.split("/")) if (segment.length >= 6) parts.add(segment);
+  for (const [, value] of url.searchParams) if (value.length >= 6) parts.add(value);
+  // Longest first, so a whole URL is replaced before its pieces are.
+  return [...parts].filter(Boolean).sort((a, b) => b.length - a.length);
+}
+
+// Replaces any secret fragment (case-insensitively) in every string inside
+// `value` with "[redacted]". Used on anything the private upstream wrote
+// that is passed on to the page (per-call JSON-RPC error messages/data).
+export function redactSecret(value, fragments) {
+  if (!fragments.length) return value;
+  if (typeof value === "string") {
+    let out = value;
+    for (const f of fragments) {
+      out = out.replace(new RegExp(f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "[redacted]");
+    }
+    return out;
+  }
+  if (Array.isArray(value)) return value.map((v) => redactSecret(v, fragments));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactSecret(v, fragments)]));
+  }
+  return value;
+}
 
 // No wildcard — only this site may call the RPC-proxy endpoints. (Does
 // NOT apply to GET /health — see handleHealth below for why.) Exact
@@ -77,7 +158,9 @@ export function jitteredDelay(baseMs, random = Math.random) {
 // "time-budget" } — `reason` is only meaningful when `retry` is false and
 // `status` was itself retryable; callers use it to word the final 502
 // correctly (out of attempts vs. stopped early to respect the timeout).
-export function decideUpstreamRetry(status, attempt, elapsedMs, random = Math.random) {
+// `budgetMs` is the time this upstream may use (the whole
+// UPSTREAM_TIMEOUT_MS, or PRIVATE_UPSTREAM_BUDGET_MS for a private one).
+export function decideUpstreamRetry(status, attempt, elapsedMs, random = Math.random, budgetMs = UPSTREAM_TIMEOUT_MS) {
   if (!RETRYABLE_UPSTREAM_STATUSES.has(status)) {
     return { retry: false, reason: "not-retryable" };
   }
@@ -85,7 +168,7 @@ export function decideUpstreamRetry(status, attempt, elapsedMs, random = Math.ra
     return { retry: false, reason: "exhausted-attempts" };
   }
   const nextDelay = jitteredDelay(RETRY_DELAYS_MS[attempt - 1], random);
-  if (elapsedMs + nextDelay >= UPSTREAM_TIMEOUT_MS) {
+  if (elapsedMs + nextDelay >= budgetMs) {
     return { retry: false, reason: "time-budget" };
   }
   return { retry: true, delayMs: nextDelay };
@@ -127,7 +210,7 @@ export function buildCorsHeaders(origin) {
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Max-Age": "86400",
-    "Access-Control-Expose-Headers": "X-Conge-Cache",
+    "Access-Control-Expose-Headers": "X-Conge-Cache, X-Conge-Upstream",
     Vary: "Origin",
   };
 }
@@ -402,63 +485,67 @@ function jsonResponse(body, status, extraHeaders) {
 
 // --- Upstream call (network — not covered by unit tests) -----------------
 
-// On a 429/503 from the upstream RPC, retries up to MAX_UPSTREAM_ATTEMPTS
-// times with the RETRY_DELAYS_MS backoff before giving up — see the
-// constants above. Every other outcome (success, a different HTTP error,
-// a network failure, or the overall timeout firing) returns immediately,
-// exactly as before. A rate-limited failure that survives every retry —
-// or that stops early because the 8s budget wouldn't cover another delay
-// — is reported with `kind: "upstream-rate-limited"` so callers (and
-// ultimately the UI) can show a specific "busy, try again" message
-// instead of a generic one; the detail text says explicitly which case
-// it was.
-async function callUpstream(rpcRequests) {
+// Calls one upstream. On a 429/503, retries up to `maxAttempts` times with
+// the jittered RETRY_DELAYS_MS backoff, all within `budgetMs`. Every other
+// outcome (success, a different HTTP error, a network failure, or the
+// budget running out) returns immediately. A rate-limited failure that
+// survives every retry — or that stops early because the budget wouldn't
+// cover another delay — is reported with `kind: "upstream-rate-limited"`
+// so the page can show a specific "busy, try again" message.
+//
+// `detail` strings are written here and never include the URL, the
+// response body or the runtime's error text (which can quote the URL) —
+// only a status code and what kind of failure it was — so a private
+// upstream's API key can't leak through them.
+async function callUpstream(rpcRequests, { url, budgetMs = UPSTREAM_TIMEOUT_MS, maxAttempts = MAX_UPSTREAM_ATTEMPTS }) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), budgetMs);
   const startedAt = Date.now();
   const outgoingBody = rpcRequests.length === 1 ? rpcRequests[0] : rpcRequests;
+  const timedOut = () => ({ ok: false, detail: `Upstream did not respond within ${Math.round(budgetMs / 100) / 10}s` });
 
   try {
-    for (let attempt = 1; attempt <= MAX_UPSTREAM_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let response;
       try {
-        response = await fetch(UPSTREAM_RPC, {
+        response = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(outgoingBody),
           signal: controller.signal,
         });
       } catch (error) {
-        const detail =
-          error.name === "AbortError"
-            ? `Upstream did not respond within ${UPSTREAM_TIMEOUT_MS / 1000}s`
-            : `Upstream request failed: ${error.message}`;
-        return { ok: false, detail };
+        return error?.name === "AbortError" ? timedOut() : { ok: false, detail: "Upstream request failed (network error)" };
       }
 
-      const decision = decideUpstreamRetry(response.status, attempt, Date.now() - startedAt);
+      const decision =
+        attempt >= maxAttempts
+          ? { retry: false, reason: "exhausted-attempts" }
+          : decideUpstreamRetry(response.status, attempt, Date.now() - startedAt, Math.random, budgetMs);
 
       if (decision.retry) {
         try {
           await delay(decision.delayMs, controller.signal);
-        } catch (error) {
-          return { ok: false, detail: `Upstream did not respond within ${UPSTREAM_TIMEOUT_MS / 1000}s` };
+        } catch {
+          return timedOut();
         }
         continue;
       }
 
       if (RETRYABLE_UPSTREAM_STATUSES.has(response.status)) {
-        // Give up either because every attempt is used up, or because
-        // there isn't enough of the 8s budget left for another delay —
-        // the detail text says which.
         const detail =
           decision.reason === "time-budget"
-            ? `Upstream is rate limited (HTTP ${response.status}) — stopped after ${attempt} of ${MAX_UPSTREAM_ATTEMPTS} attempts to stay within the ${UPSTREAM_TIMEOUT_MS / 1000}s timeout`
-            : `Upstream is rate limited (HTTP ${response.status}) after ${attempt} attempts`;
+            ? `Upstream is rate limited (HTTP ${response.status}) — stopped after ${attempt} of ${maxAttempts} attempts to stay within the time limit`
+            : `Upstream is rate limited (HTTP ${response.status}) after ${attempt} attempt${attempt === 1 ? "" : "s"}`;
         return { ok: false, detail, kind: "upstream-rate-limited" };
       }
 
-      const text = await response.text();
+      let text;
+      try {
+        text = await response.text();
+      } catch (error) {
+        return error?.name === "AbortError" ? timedOut() : { ok: false, detail: "Upstream request failed (network error)" };
+      }
       let body;
       try {
         body = JSON.parse(text);
@@ -477,6 +564,37 @@ async function callUpstream(rpcRequests) {
   }
 }
 
+// Calls the private upstream if one is set, falling back once to the public
+// RPC if it fails for any reason (rate limited after its retries, 5xx,
+// timeout, network error, bad key…). Returns callUpstream's result plus
+// `upstream` ("private" | "public" | "public-fallback") for the response
+// header. See PRIVATE_UPSTREAM_BUDGET_MS for how the 8s budget is split.
+export async function callUpstreamWithFallback(rpcRequests, env) {
+  const privateUrl = privateUpstreamUrl(env);
+  if (!privateUrl) {
+    return { ...(await callUpstream(rpcRequests, { url: PUBLIC_UPSTREAM_RPC })), upstream: "public" };
+  }
+
+  const startedAt = Date.now();
+  const first = await callUpstream(rpcRequests, { url: privateUrl, budgetMs: PRIVATE_UPSTREAM_BUDGET_MS });
+  if (first.ok) return { ...first, upstream: "private" };
+
+  const remaining = UPSTREAM_TIMEOUT_MS - (Date.now() - startedAt);
+  if (remaining < MIN_FALLBACK_MS) {
+    return { ...first, detail: `Private upstream: ${first.detail}; no time left for the public fallback`, upstream: "private" };
+  }
+  const second = await callUpstream(rpcRequests, { url: PUBLIC_UPSTREAM_RPC, budgetMs: remaining, maxAttempts: 1 });
+  if (second.ok) return { ...second, upstream: "public-fallback" };
+
+  const rateLimited = first.kind === "upstream-rate-limited" || second.kind === "upstream-rate-limited";
+  return {
+    ok: false,
+    detail: `Private upstream: ${first.detail}; public fallback: ${second.detail}`,
+    ...(rateLimited ? { kind: "upstream-rate-limited" } : {}),
+    upstream: "public-fallback",
+  };
+}
+
 // --- Route handlers --------------------------------------------------------
 
 function handlePreflight(origin) {
@@ -487,7 +605,7 @@ function handlePreflight(origin) {
   return new Response(null, { status: 204, headers: cors });
 }
 
-async function handleRpc(request, origin, ctx) {
+async function handleRpc(request, origin, ctx, env) {
   const cors = buildCorsHeaders(origin);
   if (!cors) {
     return jsonResponse({ error: "Origin not allowed" }, 403);
@@ -521,7 +639,7 @@ async function handleRpc(request, origin, ctx) {
     request.url,
     ctx,
     Date.now(),
-    { acceptPartial: new URL(request.url).searchParams.get(ACCEPT_PARTIAL_PARAM) === "1" },
+    { acceptPartial: new URL(request.url).searchParams.get(ACCEPT_PARTIAL_PARAM) === "1", env },
   );
 
   if (!outcome.ok) {
@@ -533,7 +651,7 @@ async function handleRpc(request, origin, ctx) {
     // generic connectivity error.
     const body = { error: "Upstream RPC request failed", detail: outcome.detail };
     if (outcome.kind) body.kind = outcome.kind;
-    return jsonResponse(body, 502, cors);
+    return jsonResponse(body, 502, { ...cors, [UPSTREAM_HEADER]: outcome.upstream });
   }
 
   // Back in the caller's original order, each with its own original id.
@@ -543,6 +661,7 @@ async function handleRpc(request, origin, ctx) {
   return jsonResponse(batch.isBatch ? finalResults : finalResults[0], 200, {
     ...cors,
     [CACHE_HEADER]: outcome.cacheStatus,
+    [UPSTREAM_HEADER]: outcome.upstream,
   });
 }
 
@@ -577,11 +696,13 @@ export function upstreamCallError(upstream) {
 //      call's answer; only when no call at all has an answer is the whole
 //      request failed (502). Without it, every call needs a fallback or
 //      the whole request fails (502), as before.
-// Returns { ok: true, answers, cacheStatus } — answers carry each
+// Returns { ok: true, answers, cacheStatus, upstream } — answers carry each
 // request's own id; cacheStatus is "hit" (all from cache), "miss" (none),
-// "partial", "stale", or "bypass" (nothing cacheable) — or the upstream
-// failure { ok: false, detail, kind? }.
-export async function resolveCalls(requests, requestUrl, ctx, now = Date.now(), { acceptPartial = false } = {}) {
+// "partial", "stale", or "bypass" (nothing cacheable); upstream is which
+// upstream was used (see UPSTREAM_HEADER) — or the upstream failure
+// { ok: false, detail, kind?, upstream }. The cache key never depends on
+// which upstream answered: they serve the same chain.
+export async function resolveCalls(requests, requestUrl, ctx, now = Date.now(), { acceptPartial = false, env } = {}) {
   const cache = getEdgeCache();
   const unique = new Map(); // identity -> { method, request, result?, stale?, keyRequest? }
   for (const req of requests) {
@@ -610,15 +731,19 @@ export async function resolveCalls(requests, requestUrl, ctx, now = Date.now(), 
 
   const misses = [...unique.values()].filter((e) => !e.answer);
   let cacheStatus = cacheable === 0 ? "bypass" : hits === 0 ? "miss" : misses.length === 0 ? "hit" : "partial";
+  let upstreamUsed = "none";
 
   if (misses.length > 0) {
     const outgoing = misses.map((e, i) => ({ ...e.request, id: i + 1 }));
-    const upstream = await callUpstream(outgoing);
+    const upstream = await callUpstreamWithFallback(outgoing, env);
+    upstreamUsed = upstream.upstream;
+    const fragments = secretFragments(privateUpstreamUrl(env));
 
     if (!upstream.ok) {
       const answeredElsewhere = hits > 0 || misses.some((e) => e.stale);
       if (!answeredElsewhere) return upstream;
       if (!acceptPartial && !misses.every((e) => e.stale)) return upstream;
+      // (upstream.detail is written by callUpstream and never contains the URL.)
       let staleUsed = false;
       for (const e of misses) {
         if (e.stale) {
@@ -642,7 +767,9 @@ export async function resolveCalls(requests, requestUrl, ctx, now = Date.now(), 
           return;
         }
         if (r.error || !Object.hasOwn(r, "result")) {
-          e.answer = { error: r.error ?? { code: -32603, message: "Upstream returned neither a result nor an error" } };
+          // A provider's own error text is passed on (revert reasons are
+          // useful), minus anything taken from the secret URL.
+          e.answer = { error: redactSecret(r.error ?? { code: -32603, message: "Upstream returned neither a result nor an error" }, fragments) };
           return; // errors are never cached
         }
         e.answer = { result: r.result };
@@ -657,7 +784,7 @@ export async function resolveCalls(requests, requestUrl, ctx, now = Date.now(), 
   }
 
   const answers = requests.map((req) => ({ jsonrpc: "2.0", id: req.id, ...unique.get(callIdentity(req)).answer }));
-  return { ok: true, answers, cacheStatus };
+  return { ok: true, answers, cacheStatus, upstream: upstreamUsed };
 }
 
 // GET /health is deliberately NOT origin-restricted: it's meant to be
@@ -679,14 +806,21 @@ export function resetHealthCache() {
   healthCheck = null;
 }
 
-async function checkUpstreamHealth() {
-  const outcome = await callUpstream([
-    { jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] },
-    { jsonrpc: "2.0", id: 2, method: "eth_blockNumber", params: [] },
-  ]);
+// `upstream.source` says which upstream answered ("private", "public" or
+// "public-fallback") — never its URL. A provider's own error message isn't
+// echoed either: /health is public, so it only says what kind of failure
+// it was.
+async function checkUpstreamHealth(env) {
+  const outcome = await callUpstreamWithFallback(
+    [
+      { jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] },
+      { jsonrpc: "2.0", id: 2, method: "eth_blockNumber", params: [] },
+    ],
+    env,
+  );
 
   if (!outcome.ok) {
-    return { ok: false, upstream: { reachable: false }, error: outcome.detail };
+    return { ok: false, upstream: { reachable: false, source: outcome.upstream }, error: outcome.detail };
   }
 
   const results = Array.isArray(outcome.body) ? outcome.body : [outcome.body];
@@ -695,23 +829,28 @@ async function checkUpstreamHealth() {
   const rpcError = chainIdResult?.error || blockNumberResult?.error;
 
   if (rpcError) {
-    return { ok: false, upstream: { reachable: true, chainId: null, blockNumber: null }, error: rpcError.message };
+    return {
+      ok: false,
+      upstream: { reachable: true, source: outcome.upstream, chainId: null, blockNumber: null },
+      error: "Upstream returned a JSON-RPC error",
+    };
   }
 
   const chainId = typeof chainIdResult?.result === "string" ? parseInt(chainIdResult.result, 16) : null;
   const blockNumber = typeof blockNumberResult?.result === "string" ? parseInt(blockNumberResult.result, 16) : null;
 
-  return { ok: true, upstream: { reachable: true, chainId, blockNumber } };
+  return { ok: true, upstream: { reachable: true, source: outcome.upstream, chainId, blockNumber } };
 }
 
-async function handleHealth(now = Date.now()) {
+async function handleHealth(env, now = Date.now()) {
   if (!healthCheck || now - healthCheck.startedAt >= HEALTH_CACHE_MS) {
     // Never cache a rejection: an unexpected throw becomes an honest
-    // "unreachable" body like any other upstream failure.
-    const promise = checkUpstreamHealth().catch((error) => ({
+    // "unreachable" body like any other upstream failure (with a generic
+    // message — the thrown text could quote the upstream URL).
+    const promise = checkUpstreamHealth(env).catch(() => ({
       ok: false,
       upstream: { reachable: false },
-      error: error?.message || String(error),
+      error: "Health check failed unexpectedly",
     }));
     healthCheck = { startedAt: now, promise };
   }
@@ -737,14 +876,14 @@ export default {
       if (request.method !== "GET") {
         return jsonResponse({ error: "Method not allowed" }, 405, { "Access-Control-Allow-Origin": "*" });
       }
-      return handleHealth();
+      return handleHealth(env);
     }
 
     if (url.pathname === "/") {
       if (request.method !== "POST") {
         return jsonResponse({ error: "Method not allowed, use POST" }, 405, buildCorsHeaders(origin) || undefined);
       }
-      return handleRpc(request, origin, ctx);
+      return handleRpc(request, origin, ctx, env);
     }
 
     return jsonResponse({ error: "Not found" }, 404);

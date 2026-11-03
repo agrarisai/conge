@@ -107,7 +107,10 @@
           from some networks and devices (a TLS certificate error) and doesn't send the CORS
           headers a browser needs. That endpoint is also shared by everyone on the chain and
           tightly rate-limited, so the Worker retries a rate-limited call a few times with a short
-          backoff rather than failing straight away.
+          backoff rather than failing straight away. It can also send these calls to a private
+          node provider first, falling back to the public endpoint if that fails. Either way, what
+          reaches the RPC is the same public contract call (an address and call data) — nothing
+          about you.
         </p>
         <p>
           The Worker only forwards a fixed allow-list of read-only calls
