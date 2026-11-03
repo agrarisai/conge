@@ -79,7 +79,8 @@ API):
   upstream outage a visitor may see a result up to 10 minutes old instead
   of "Unknown" for that check; on a read-only scanner, slightly old public
   data is more useful than nothing, and the header keeps it detectable.
-- **One failure never hides another answer.** When the upstream fails but
+- **One failure never hides another answer** (opt-in: the page posts to
+  `/?partial=1`). When the upstream fails but
   some calls in the request were answered (fresh from the cache, or
   stale), the response is still `200`: the answered calls get their
   results, and each call that couldn't be answered gets its own JSON-RPC
@@ -91,7 +92,12 @@ API):
   was busy", never as a revert: owner() and the Uniswap v4 balance keep
   whichever succeeded, while the sell simulation treats the whole batch
   as not completed, so a busy RPC can never look like "selling is
-  blocked".
+  blocked". Without `?partial=1` (an older copy of the page), a request
+  that can't be fully answered fails with `502` as before (stale-if-error
+  still applies when every call has a fallback), so an older page never
+  sees an error it could misread. It's a query parameter, not a header,
+  so the CORS preflight is unchanged and the page and the Worker can be
+  updated in either order.
 - **Response header.** Every `POST /` answer carries `X-Conge-Cache`:
   `hit` (all from cache), `partial`, `miss`, `stale`, or `bypass`
   (nothing cacheable, e.g. only `eth_blockNumber`). It's exposed to the

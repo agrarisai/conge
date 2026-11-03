@@ -292,6 +292,16 @@ function cacheStoreSeconds(method) {
 }
 
 export const CACHE_HEADER = "X-Conge-Cache";
+
+// Pages that understand per-call "upstream failed" errors (see
+// resolveCalls) POST to "/?partial=1". Without it, a partly answerable
+// request fails as a whole (502), as it always did — an older page would
+// otherwise read such an error as a revert, e.g. a busy RPC as "selling is
+// blocked". A query parameter rather than a header on purpose: a new
+// header would change the CORS preflight, and an older Worker would then
+// reject every request from a newer page; an older Worker simply ignores
+// the query string.
+export const ACCEPT_PARTIAL_PARAM = "partial";
 const CACHED_AT_HEADER = "X-Conge-Cached-At";
 
 // Stable JSON: object keys sorted (recursively), strings lowercased — hex
@@ -510,6 +520,8 @@ async function handleRpc(request, origin, ctx) {
     validated.filter((v) => v.ok).map((v) => v.request),
     request.url,
     ctx,
+    Date.now(),
+    { acceptPartial: new URL(request.url).searchParams.get(ACCEPT_PARTIAL_PARAM) === "1" },
   );
 
   if (!outcome.ok) {
@@ -558,16 +570,18 @@ export function upstreamCallError(upstream) {
 //      successful result is cached.
 //   4. If the upstream fails after its retries, each call that needed it
 //      gets its cached result if one is at most STALE_IF_ERROR_MAX_AGE_MS
-//      old (the response is then marked "stale"), and otherwise its own
-//      JSON-RPC error saying the upstream failed (see upstreamCallError).
-//      So one failed call never hides another call's answer. Only when
-//      no call at all has an answer is the whole request failed, exactly
-//      as before (502).
+//      old (the response is then marked "stale"). With `acceptPartial`
+//      (the page posted to "/?partial=1"), a call with no such
+//      fallback gets its own JSON-RPC error saying the upstream failed
+//      (see upstreamCallError), so one failed call never hides another
+//      call's answer; only when no call at all has an answer is the whole
+//      request failed (502). Without it, every call needs a fallback or
+//      the whole request fails (502), as before.
 // Returns { ok: true, answers, cacheStatus } — answers carry each
 // request's own id; cacheStatus is "hit" (all from cache), "miss" (none),
 // "partial", "stale", or "bypass" (nothing cacheable) — or the upstream
 // failure { ok: false, detail, kind? }.
-export async function resolveCalls(requests, requestUrl, ctx, now = Date.now()) {
+export async function resolveCalls(requests, requestUrl, ctx, now = Date.now(), { acceptPartial = false } = {}) {
   const cache = getEdgeCache();
   const unique = new Map(); // identity -> { method, request, result?, stale?, keyRequest? }
   for (const req of requests) {
@@ -604,6 +618,7 @@ export async function resolveCalls(requests, requestUrl, ctx, now = Date.now()) 
     if (!upstream.ok) {
       const answeredElsewhere = hits > 0 || misses.some((e) => e.stale);
       if (!answeredElsewhere) return upstream;
+      if (!acceptPartial && !misses.every((e) => e.stale)) return upstream;
       let staleUsed = false;
       for (const e of misses) {
         if (e.stale) {

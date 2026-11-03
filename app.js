@@ -40,6 +40,7 @@ import {
 // (chain-ID cross-check, owner(), the sell-simulation honeypot check
 // below); the site works fully with it unreachable too.
 const WORKER_URL = "https://rpc.conge.site";
+const WORKER_BATCH_URL = `${WORKER_URL}/?partial=1`;
 
 // Single source of truth for chain/explorer configuration. The Blockscout
 // API v2 (explorerApiUrl) is the PRIMARY data source for this site — it's
@@ -574,8 +575,11 @@ async function callWorkerBatch(calls, label, signal, { allowPartial = false } = 
     ],
   }));
 
+  // "?partial=1" lets the Worker answer what it can when the upstream fails
+  // for only some calls — this page reads those per-call errors (see
+  // UPSTREAM_FAILURE_KINDS above). An older Worker ignores it.
   const raw = await fetchRaw(
-    WORKER_URL,
+    WORKER_BATCH_URL,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

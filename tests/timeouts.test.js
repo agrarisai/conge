@@ -34,7 +34,7 @@ test("the page waits for Worker requests at least 3s longer than the Worker's ow
 });
 
 test("every Worker request in app.js uses the Worker timeout", () => {
-  const workerCalls = appSource.match(/fetchRaw\(\s*WORKER_URL,[\s\S]*?\n\s*\)/g) ?? [];
+  const workerCalls = appSource.match(/fetchRaw\(\s*WORKER_(?:BATCH_)?URL,[\s\S]*?\n\s*\)/g) ?? [];
   assert.ok(workerCalls.length >= 4, `expected the 4 Worker fetchRaw calls, found ${workerCalls.length}`);
   for (const c of workerCalls) assert.match(c, /timeoutMs: WORKER_FETCH_TIMEOUT_MS/);
 });

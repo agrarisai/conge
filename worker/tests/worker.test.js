@@ -881,10 +881,10 @@ function setupCacheTest(t, { now = 1_800_000_000_000 } = {}) {
 
 const call = (id, data, extra = {}) => ({ jsonrpc: "2.0", id, method: "eth_call", params: [{ to: VALID_ADDRESS, data, ...extra }, "latest"] });
 
-async function post(body, origin = SITE_ORIGIN) {
-  const response = await worker.fetch(
-    new Request(WORKER_URL, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(body) }),
-  );
+async function post(body, origin = SITE_ORIGIN, { acceptPartial = true } = {}) {
+  const headers = { Origin: origin, "Content-Type": "application/json" };
+  const url = acceptPartial ? `${WORKER_URL}?partial=1` : WORKER_URL;
+  const response = await worker.fetch(new Request(url, { method: "POST", headers, body: JSON.stringify(body) }));
   return { status: response.status, cacheHeader: response.headers.get(CACHE_HEADER), body: await response.json(), headers: response.headers };
 }
 
@@ -1094,4 +1094,39 @@ test("cache doesn't loosen the origin check: a disallowed origin gets 403 even f
   assert.equal(res.headers.get("access-control-allow-origin"), null);
   assert.equal(res.cacheHeader, null);
   assert.equal(state.upstreamCalls.length, 1);
+});
+
+test("partial answers only for pages that ask: without ?partial=1, a partly answerable request fails as before (502)", async (t) => {
+  const { state } = setupCacheTest(t);
+  await post(call(1, "0x8da5cb5b"));
+  state.now += 10_000; // fresh hit for owner()
+  state.mode = "500";
+  const old = await post([call(2, "0x8da5cb5b"), call(3, "0x70a08231")], SITE_ORIGIN, { acceptPartial: false });
+  assert.equal(old.status, 502, "an older page never sees a per-call upstream error it could misread as a revert");
+  const fresh = await post([call(2, "0x8da5cb5b"), call(3, "0x70a08231")]);
+  assert.equal(fresh.status, 200);
+  assert.equal(fresh.body[1].error.data.kind, "upstream-unreachable");
+});
+
+test("without ?partial=1, stale-if-error still works when every call has a fallback", async (t) => {
+  const { state } = setupCacheTest(t);
+  await post([call(1, "0x8da5cb5b"), call(2, "0x70a08231")], SITE_ORIGIN, { acceptPartial: false });
+  state.now += 5 * 60_000;
+  state.mode = "throw";
+  const res = await post([call(3, "0x8da5cb5b"), call(4, "0x70a08231")], SITE_ORIGIN, { acceptPartial: false });
+  assert.equal(res.status, 200);
+  assert.equal(res.cacheHeader, "stale");
+});
+
+test("the partial opt-in needs no new CORS request header (an older Worker's preflight still passes)", () => {
+  assert.equal(buildCorsHeaders(SITE_ORIGIN)["Access-Control-Allow-Headers"], "Content-Type");
+});
+
+test("?partial=1 still goes through every check: origin, method allow-list", async (t) => {
+  const { state } = setupCacheTest(t);
+  const evil = await post(call(1, "0x8da5cb5b"), "https://evil.example");
+  assert.equal(evil.status, 403);
+  const send = await post({ jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: ["0x00"] });
+  assert.equal(send.body.error.code, -32601);
+  assert.equal(state.upstreamCalls.length, 0);
 });
