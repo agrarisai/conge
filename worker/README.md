@@ -1,14 +1,17 @@
 # Conge RPC proxy (Cloudflare Worker)
 
-A thin, read-only JSON-RPC proxy for `https://rpc.mainnet.chain.robinhood.com`,
-so Conge's browser code never has to call that RPC directly. It exists
+A thin, read-only JSON-RPC proxy for `https://rpc.mainnet.chain.robinhood.com`
+(optionally a private node-provider endpoint first — see
+[Private upstream](#private-upstream-optional)), so Conge's browser code
+never has to call an RPC directly. It exists
 because the RPC has been reported unreachable from some networks (a TLS
 certificate problem that a browser reports identically to a CORS
 failure — see the main [README](../README.md#troubleshooting-network-connectivity)).
 This Worker sits in front of it on Cloudflare's edge instead.
 
 It is a single file (`index.js`), no dependencies, no build step, no
-secrets, no KV/D1, and it never logs request bodies. The only thing it
+KV/D1, and it never logs request bodies. Its only secret is the optional
+private upstream URL, which lives in Cloudflare, never in this repo. The only thing it
 keeps is a short-lived cache of public chain data (see
 [Caching](#caching-and-stale-if-error)) — nothing about visitors.
 
@@ -119,6 +122,82 @@ randomized by ±25%, so visitors rate-limited at the same moment don't all
 retry in lockstep. The 8 second overall deadline is unchanged; the
 deadline check uses the jittered delay.
 
+## Private upstream (optional)
+
+The public RPC rate-limits (`429`) traffic coming from Cloudflare's shared
+IP addresses. If you have a private endpoint from a node provider (its URL
+usually contains an API key), the Worker can use it first, with the public
+RPC as a fallback.
+
+**The URL lives only in a Cloudflare secret named `UPSTREAM_RPC_URL`** —
+never in this repository, never in `index.js`.
+
+- **Secret set to a valid `https://` URL:** that endpoint is tried first,
+  with the normal retries (jittered backoff) for up to **5.5s**. If it
+  still fails — rate limited, `5xx`, timeout, network error, rejected key —
+  the Worker tries the public RPC **once**, with the remaining time (at
+  least **2.5s**). Only after that does it fall back to stale cache or
+  return an error. The overall limit stays **8s**.
+- **Secret not set, empty, or not a valid `https://` URL:** it's ignored
+  and only the public RPC is used, with the full 8s and retries, exactly
+  as before.
+- **Which one answered:** every `POST /` response carries
+  `X-Conge-Upstream`, readable by the page:
+  `private`, `public` (no private upstream set), `public-fallback` (the
+  private one failed and the public one was tried) or `none` (everything
+  came from the cache). `/health` reports the same as `upstream.source`.
+  Neither ever contains the URL.
+- **Never leaked.** The URL, or any part of it, is never put in a
+  response, an error `detail`, a header or a log. Error details are
+  written by the Worker itself (a status code and the kind of failure,
+  never the runtime's raw error text, which could quote the URL). A
+  provider's own per-call error messages are passed on (revert reasons are
+  useful) with anything taken from the URL replaced by `[redacted]`;
+  `/health` never echoes provider messages at all.
+- **Nothing else changes:** the same allow-lists, `"latest"` rule and
+  limits; the cache is shared between both upstreams and its key never
+  includes the upstream URL.
+- **Privacy:** the private provider receives exactly the same public
+  chain calls the public RPC would (contract addresses and call data) —
+  nothing about visitors: no IP, no origin, no headers are forwarded.
+
+### Adding the secret in the Cloudflare dashboard (works on a phone)
+
+1. Open **dash.cloudflare.com** and sign in. If the page is cramped, turn
+   on your browser's **"Desktop site"** option.
+2. Go to **Workers & Pages** and tap the **`conge-rpc`** Worker.
+3. Open **Settings** → **Variables and Secrets**.
+4. Tap **Add**.
+5. Set **Type** to **Secret** (not Text — a secret's value is hidden
+   after saving).
+6. **Variable name:** `UPSTREAM_RPC_URL`
+7. **Value:** paste the full `https://…` URL from your node provider.
+8. Tap **Deploy** (or **Save and deploy**).
+
+To remove it, delete the secret the same way; the Worker goes back to the
+public RPC alone. With Wrangler instead:
+`cd worker && npx wrangler secret put UPSTREAM_RPC_URL`.
+
+### Checking it's used
+
+Send any request with an `Origin` header and look at the
+`x-conge-upstream` response header (use a call that isn't cached yet, or
+you'll see `none`):
+
+```bash
+curl -s -o /dev/null -D - -X POST https://rpc.conge.site/ \
+  -H "Origin: https://conge.site" \
+  -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' \
+  | grep -i x-conge-upstream
+```
+
+`private` means the secret is in use. `public` means it isn't set (or
+isn't a valid `https://` URL). `public-fallback` means it's set but the
+private endpoint failed just now — check the key with your provider. On a
+phone, opening `https://rpc.conge.site/health` shows the same as
+`"source": "private"`.
+
 ## Deploying
 
 The Worker is deployed **manually through the Cloudflare dashboard**. It
@@ -147,8 +226,10 @@ paste `index.js` in the editor as above. It will be live at
 `https://conge-rpc.<your-subdomain>.workers.dev`.
 
 If you ever need to change the allowed origins (e.g. testing from
-`localhost`) or the upstream URL, edit the `ALLOWED_ORIGINS` and
-`UPSTREAM_RPC` constants near the top of `index.js`, then deploy as above.
+`localhost`) or the public upstream URL, edit the `ALLOWED_ORIGINS` and
+`PUBLIC_UPSTREAM_RPC` constants near the top of `index.js`, then deploy as
+above. A private upstream is set as a secret instead (see above), never in
+the code.
 
 ### Optional: deploying with Wrangler from your own machine
 
@@ -163,9 +244,11 @@ optional, and nothing runs it automatically. If you do use it:
   Wrangler deploy turns the `conge-rpc.<subdomain>.workers.dev` address
   (back) on. If you've switched that address off in the dashboard, set
   `workers_dev = false` first.
-- **Dashboard-only variables would be dropped.** The Worker currently has
-  no environment variables or bindings. If you ever add some, also put them
-  in `wrangler.toml`.
+- **Secrets are kept.** The optional `UPSTREAM_RPC_URL` secret isn't in
+  `wrangler.toml` (it must never be in the repo) and a Wrangler deploy
+  leaves it in place. Set it with `npx wrangler secret put
+  UPSTREAM_RPC_URL`. Plain (non-secret) dashboard variables would be
+  dropped by a Wrangler deploy; the Worker has none.
 
 ## Reading `/health`
 
@@ -174,7 +257,7 @@ browser — phone or desktop, no special headers needed. You'll get JSON
 back that looks like one of:
 
 ```json
-{ "ok": true, "upstream": { "reachable": true, "chainId": 4663, "blockNumber": 1234567 } }
+{ "ok": true, "upstream": { "reachable": true, "source": "public", "chainId": 4663, "blockNumber": 1234567 } }
 ```
 
 ```json
@@ -182,7 +265,10 @@ back that looks like one of:
 ```
 
 `ok: true` means the upstream RPC answered both `eth_chainId` and
-`eth_blockNumber` successfully just now. Most phone browsers render JSON
+`eth_blockNumber` successfully just now. `source` says which upstream
+answered — `private`, `public` or `public-fallback` (see
+[Private upstream](#private-upstream-optional)); the URL itself is never
+shown. Most phone browsers render JSON
 readably by default; if yours doesn't, any "view source" / "raw" toggle
 works too.
 

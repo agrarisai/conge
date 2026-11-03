@@ -22,6 +22,13 @@ import worker, {
   UPSTREAM_TIMEOUT_MS,
   HEALTH_CACHE_MS,
   resetHealthCache,
+  PUBLIC_UPSTREAM_RPC,
+  PRIVATE_UPSTREAM_BUDGET_MS,
+  PUBLIC_FALLBACK_RESERVE_MS,
+  UPSTREAM_HEADER,
+  privateUpstreamUrl,
+  secretFragments,
+  redactSecret,
   RETRY_JITTER,
   jitteredDelay,
   CACHE_TTL_MS,
@@ -568,7 +575,7 @@ test("/health: 20 rapid requests from a script share one upstream check", async 
   );
   for (const r of responses) {
     assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { ok: true, upstream: { reachable: true, chainId: 4663, blockNumber: 16 } });
+    assert.deepEqual(await r.json(), { ok: true, upstream: { reachable: true, source: "public", chainId: 4663, blockNumber: 16 } });
   }
   assert.equal(upstream.calls, 1);
   assert.equal(responses[0].headers.get("cache-control"), `public, max-age=${HEALTH_CACHE_MS / 1000}`);
@@ -902,7 +909,7 @@ test("cache: a repeated batch is answered from cache with the caller's own ids a
   assert.equal(state.upstreamCalls.length, 1, "no new upstream call");
   assert.deepEqual(second.body.map((r) => r.id), ["x", 99]);
   assert.deepEqual(second.body.map((r) => r.result), first.body.map((r) => r.result));
-  assert.equal(second.headers.get("access-control-expose-headers"), "X-Conge-Cache");
+  assert.equal(second.headers.get("access-control-expose-headers"), "X-Conge-Cache, X-Conge-Upstream");
 });
 
 test("cache: a partly cached batch sends only the misses upstream and merges results back in order", async (t) => {
@@ -1129,4 +1136,226 @@ test("?partial=1 still goes through every check: origin, method allow-list", asy
   const send = await post({ jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: ["0x00"] });
   assert.equal(send.body.error.code, -32601);
   assert.equal(state.upstreamCalls.length, 0);
+});
+
+// --- Private upstream (UPSTREAM_RPC_URL secret) -------------------------------
+//
+// A made-up URL shaped like a node provider's, with a fake key in the path
+// and the query string — nothing real.
+const SECRET_KEY = "k3yAbCdEf0123456789xyz";
+const SECRET_URL = `https://node.provider.example/v2/${SECRET_KEY}?token=t0kenValue987654`;
+const SECRET_ENV = { UPSTREAM_RPC_URL: SECRET_URL };
+const SECRET_PIECES = [SECRET_URL, SECRET_KEY, "t0kenValue987654", "node.provider.example"];
+
+function assertNoLeak(text, where) {
+  for (const piece of SECRET_PIECES) {
+    assert.ok(!text.toLowerCase().includes(piece.toLowerCase()), `${where} leaks "${piece}": ${text}`);
+  }
+}
+
+// Records which URL each upstream call went to; `behave(url, items)`
+// returns a Response or throws.
+function stubUpstreams(t, behave) {
+  const originalFetch = globalThis.fetch;
+  const originalCaches = globalThis.caches;
+  const seen = [];
+  globalThis.caches = undefined;
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    const items = Array.isArray(body) ? body : [body];
+    seen.push(String(url));
+    return behave(String(url), items, Array.isArray(body));
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    globalThis.caches = originalCaches;
+    resetHealthCache();
+  });
+  return seen;
+}
+
+const okResponse = (items, isBatch, result = "0x1") => {
+  const out = items.map((r) => ({ jsonrpc: "2.0", id: r.id, result }));
+  return new Response(JSON.stringify(isBatch ? out : out[0]), { status: 200, headers: { "Content-Type": "application/json" } });
+};
+
+async function rpc(body, env) {
+  const response = await worker.fetch(
+    new Request(`${WORKER_URL}?partial=1`, { method: "POST", headers: { Origin: SITE_ORIGIN, "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    env,
+  );
+  const text = await response.text();
+  return { status: response.status, text, body: JSON.parse(text), headers: response.headers };
+}
+
+const ownerCall = (id = 1) => ({ jsonrpc: "2.0", id, method: "eth_call", params: [{ to: VALID_ADDRESS, data: "0x8da5cb5b" }, "latest"] });
+
+test("privateUpstreamUrl: a valid https URL is used; anything else is ignored", () => {
+  assert.equal(privateUpstreamUrl(SECRET_ENV), new URL(SECRET_URL).href);
+  assert.equal(privateUpstreamUrl({ UPSTREAM_RPC_URL: `  ${SECRET_URL}  ` }), new URL(SECRET_URL).href);
+  for (const bad of [undefined, null, "", "   ", "not a url", "http://node.provider.example/v2/key", "ftp://x.example/", "https://", "https://a b.example/", 42, {}]) {
+    assert.equal(privateUpstreamUrl({ UPSTREAM_RPC_URL: bad }), null, String(bad));
+  }
+  assert.equal(privateUpstreamUrl(undefined), null);
+  assert.equal(privateUpstreamUrl({}), null);
+});
+
+test("time split: the private upstream's budget plus the public reserve is the 8s deadline", () => {
+  assert.equal(PRIVATE_UPSTREAM_BUDGET_MS + PUBLIC_FALLBACK_RESERVE_MS, UPSTREAM_TIMEOUT_MS);
+  assert.ok(PUBLIC_FALLBACK_RESERVE_MS >= 2000);
+  // The retry decision respects the private budget, not the whole 8s.
+  assert.deepEqual(decideUpstreamRetry(429, 3, PRIVATE_UPSTREAM_BUDGET_MS - 1000, () => 0.5, PRIVATE_UPSTREAM_BUDGET_MS), {
+    retry: false,
+    reason: "time-budget",
+  });
+  assert.equal(decideUpstreamRetry(429, 3, PRIVATE_UPSTREAM_BUDGET_MS - 1000, () => 0.5).retry, true);
+});
+
+test("secret not set: only the public RPC is called, header says public", async (t) => {
+  const seen = stubUpstreams(t, (url, items, isBatch) => okResponse(items, isBatch));
+  for (const env of [undefined, {}, { UPSTREAM_RPC_URL: "" }, { UPSTREAM_RPC_URL: "http://insecure.example/key" }]) {
+    const res = await rpc(ownerCall(), env);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get(UPSTREAM_HEADER), "public");
+  }
+  assert.ok(seen.every((u) => u === PUBLIC_UPSTREAM_RPC), seen.join(" "));
+});
+
+test("secret set: the private upstream is used, header says private, the public RPC isn't called", async (t) => {
+  const seen = stubUpstreams(t, (url, items, isBatch) => okResponse(items, isBatch, "0xbeef"));
+  const res = await rpc([ownerCall(1), ownerCall(2)], SECRET_ENV);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get(UPSTREAM_HEADER), "private");
+  assert.equal(res.headers.get("access-control-expose-headers"), "X-Conge-Cache, X-Conge-Upstream");
+  assert.deepEqual(seen, [new URL(SECRET_URL).href]);
+  assert.deepEqual(res.body.map((r) => r.result), ["0xbeef", "0xbeef"]);
+  assertNoLeak(res.text, "body");
+  for (const [k, v] of res.headers) assertNoLeak(`${k}: ${v}`, "header");
+});
+
+test("fallback order: private first, then the public RPC once, header says public-fallback", async (t) => {
+  for (const failure of ["500", "throw", "403"]) {
+    const seen = stubUpstreams(t, (url, items, isBatch) => {
+      if (url !== PUBLIC_UPSTREAM_RPC) {
+        if (failure === "throw") throw new TypeError(`fetch failed for ${SECRET_URL}`);
+        return new Response(`error at ${SECRET_URL}`, { status: Number(failure) });
+      }
+      return okResponse(items, isBatch, "0xfa11");
+    });
+    const res = await rpc(ownerCall(), SECRET_ENV);
+    assert.equal(res.status, 200, failure);
+    assert.equal(res.headers.get(UPSTREAM_HEADER), "public-fallback", failure);
+    assert.equal(res.body.result, "0xfa11");
+    assert.deepEqual(seen, [new URL(SECRET_URL).href, PUBLIC_UPSTREAM_RPC], failure);
+    assertNoLeak(res.text, `body (${failure})`);
+  }
+});
+
+test("both upstreams fail: 502 with a generic detail that never contains the secret URL", async (t) => {
+  const seen = stubUpstreams(t, (url) => {
+    if (url === PUBLIC_UPSTREAM_RPC) return new Response("<html>bad gateway</html>", { status: 502 });
+    throw new TypeError(`getaddrinfo failed for ${SECRET_URL} (key ${SECRET_KEY})`);
+  });
+  const res = await rpc(ownerCall(), SECRET_ENV);
+  assert.equal(res.status, 502);
+  assert.equal(seen.length, 2, "public fallback tried exactly once");
+  assert.equal(res.headers.get(UPSTREAM_HEADER), "public-fallback");
+  assert.match(res.body.detail, /^Private upstream: Upstream request failed \(network error\); public fallback: Upstream returned a non-JSON response \(HTTP 502\)$/);
+  assertNoLeak(res.text, "502 body");
+  for (const [k, v] of res.headers) assertNoLeak(`${k}: ${v}`, "header");
+});
+
+test("no leak: a provider's per-call error message quoting the secret URL is redacted", async (t) => {
+  stubUpstreams(t, (url, items, isBatch) => {
+    const out = items.map((r) => ({
+      jsonrpc: "2.0",
+      id: r.id,
+      error: { code: -32000, message: `execution reverted (request to ${SECRET_URL} key ${SECRET_KEY})`, data: { url: SECRET_URL.toUpperCase() } },
+    }));
+    return new Response(JSON.stringify(isBatch ? out : out[0]), { status: 200 });
+  });
+  const res = await rpc(ownerCall(), SECRET_ENV);
+  assert.equal(res.status, 200);
+  assert.match(res.body.error.message, /^execution reverted \(request to \[redacted\] key \[redacted\]\)$/);
+  assertNoLeak(res.text, "per-call error");
+});
+
+test("a rate-limited private upstream that then fails over keeps kind upstream-rate-limited when the fallback also fails", async (t) => {
+  stubUpstreams(t, (url) => new Response("{}", { status: url === PUBLIC_UPSTREAM_RPC ? 500 : 429 }));
+  t.mock.method(Math, "random", () => 0); // shortest jittered delays
+  const res = await rpc(ownerCall(), SECRET_ENV);
+  assert.equal(res.status, 502);
+  assert.equal(res.body.kind, "upstream-rate-limited");
+  assertNoLeak(res.text, "body");
+});
+
+test("/health with the secret set: reports source private, never the URL; falls back like POST", async (t) => {
+  let privateDown = false;
+  stubUpstreams(t, (url, items, isBatch) => {
+    if (url !== PUBLIC_UPSTREAM_RPC && privateDown) throw new TypeError(`down: ${SECRET_URL}`);
+    const out = items.map((r) => ({ jsonrpc: "2.0", id: r.id, result: r.method === "eth_chainId" ? "0x1237" : "0x10" }));
+    return new Response(JSON.stringify(isBatch ? out : out[0]), { status: 200 });
+  });
+  const ok = await worker.fetch(new Request(`${WORKER_URL}health`), SECRET_ENV);
+  const okText = await ok.text();
+  assert.equal(JSON.parse(okText).upstream.source, "private");
+  assertNoLeak(okText, "/health");
+  resetHealthCache();
+  privateDown = true;
+  const fb = await worker.fetch(new Request(`${WORKER_URL}health`), SECRET_ENV);
+  const fbText = await fb.text();
+  assert.equal(JSON.parse(fbText).upstream.source, "public-fallback");
+  assertNoLeak(fbText, "/health fallback");
+});
+
+test("/health: a provider's JSON-RPC error message is not echoed", async (t) => {
+  stubUpstreams(t, (url, items, isBatch) => {
+    const out = items.map((r) => ({ jsonrpc: "2.0", id: r.id, error: { code: -32000, message: `invalid key for ${SECRET_URL}` } }));
+    return new Response(JSON.stringify(isBatch ? out : out[0]), { status: 200 });
+  });
+  const res = await worker.fetch(new Request(`${WORKER_URL}health`), SECRET_ENV);
+  const text = await res.text();
+  assert.equal(JSON.parse(text).error, "Upstream returned a JSON-RPC error");
+  assertNoLeak(text, "/health");
+});
+
+test("cache key never depends on the upstream: an answer cached via the private upstream is a hit without it", async (t) => {
+  const { state } = setupCacheTest(t);
+  const viaPrivate = await worker.fetch(
+    new Request(WORKER_URL, { method: "POST", headers: { Origin: SITE_ORIGIN, "Content-Type": "application/json" }, body: JSON.stringify(ownerCall(1)) }),
+    SECRET_ENV,
+  );
+  assert.equal(viaPrivate.headers.get(UPSTREAM_HEADER), "private");
+  const again = await worker.fetch(
+    new Request(WORKER_URL, { method: "POST", headers: { Origin: SITE_ORIGIN, "Content-Type": "application/json" }, body: JSON.stringify(ownerCall(2)) }),
+    undefined,
+  );
+  assert.equal(again.headers.get(CACHE_HEADER), "hit");
+  assert.equal(again.headers.get(UPSTREAM_HEADER), "none");
+  assert.equal(state.upstreamCalls.length, 1);
+});
+
+test("secretFragments / redactSecret: whole URL and key-like parts, case-insensitive; short parts left alone", () => {
+  const f = secretFragments(SECRET_URL);
+  assert.ok(f.includes(SECRET_KEY) && f.includes("t0kenValue987654"));
+  assert.ok(!f.includes("v2"));
+  assert.equal(redactSecret(`x ${SECRET_URL} y`, f), "x [redacted] y");
+  assert.equal(redactSecret(SECRET_KEY.toUpperCase(), f), "[redacted]");
+  assert.deepEqual(redactSecret({ a: [SECRET_KEY, 1] }, f), { a: ["[redacted]", 1] });
+  assert.equal(redactSecret("execution reverted", f), "execution reverted");
+  assert.deepEqual(secretFragments(null), []);
+});
+
+test("the secret doesn't loosen any check: disallowed origin and method are rejected without calling either upstream", async (t) => {
+  const seen = stubUpstreams(t, (url, items, isBatch) => okResponse(items, isBatch));
+  const evil = await worker.fetch(
+    new Request(WORKER_URL, { method: "POST", headers: { Origin: "https://evil.example", "Content-Type": "application/json" }, body: JSON.stringify(ownerCall()) }),
+    SECRET_ENV,
+  );
+  assert.equal(evil.status, 403);
+  const send = await rpc({ jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: ["0x00"] }, SECRET_ENV);
+  assert.equal(send.body.error.code, -32601);
+  const old = await rpc({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: VALID_ADDRESS, data: "0x01" }, "0x1"] }, SECRET_ENV);
+  assert.equal(old.body.error.code, -32602);
+  assert.equal(seen.length, 0);
 });
