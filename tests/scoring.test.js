@@ -25,6 +25,8 @@ import {
   scoreProxyUpgrade,
   scoreOwnerPrivileges,
   scoreOwnerStatus,
+  RPC_BUSY_MESSAGE,
+  isUpstreamRpcFailure,
   SELECTOR,
   padAddressArg,
   padUintArg,
@@ -1154,4 +1156,31 @@ test("scoreToken: a Uniswap v4 balance adds the neutral finding without changing
 test("scoreToken: a Uniswap v4 balance alone can't lift 'Insufficient data' into a verdict", () => {
   const { overallLevel } = scoreToken({ now: new Date(), poolManagerBalanceRaw: "1000", totalSupplyRaw: "2000" });
   assert.equal(overallLevel, "Insufficient data");
+});
+
+// --- Upstream RPC failures: clearer owner message ------------------------------
+
+test("scoreOwnerStatus: an upstream RPC failure says the RPC is busy, keeps the diagnostics, stays Unknown", () => {
+  for (const kind of ["upstream-rate-limited", "upstream-unreachable"]) {
+    const diagnostics = [{ label: "Worker — eth_call owner()", kind, errorMessage: "Upstream is rate limited (HTTP 429) after 5 attempts" }];
+    const f = scoreOwnerStatus(null, diagnostics);
+    assert.equal(f.title, "Owner unknown");
+    assert.equal(f.detail, "The network RPC is busy right now. Try rescanning in a minute.");
+    assert.equal(f.detail, RPC_BUSY_MESSAGE);
+    assert.equal(f.known, false);
+    assert.equal(f.diagnostics, diagnostics, "technical details kept");
+  }
+});
+
+test("scoreOwnerStatus: other failures keep the plain message (not every Unknown is the RPC being busy)", () => {
+  for (const diagnostics of [null, [{ kind: "json-rpc-error", errorMessage: "execution reverted" }], [{ kind: "network-or-cors" }], [{ kind: "timeout" }]]) {
+    assert.equal(scoreOwnerStatus(null, diagnostics).detail, "The owner could not be read for this contract.");
+  }
+});
+
+test("isUpstreamRpcFailure", () => {
+  assert.equal(isUpstreamRpcFailure([{ kind: "upstream-rate-limited" }]), true);
+  assert.equal(isUpstreamRpcFailure([{ kind: "json-rpc-error" }, { kind: "upstream-unreachable" }]), true);
+  assert.equal(isUpstreamRpcFailure([{ kind: "timeout" }]), false);
+  assert.equal(isUpstreamRpcFailure(null), false);
 });

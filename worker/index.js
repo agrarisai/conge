@@ -534,6 +534,20 @@ async function handleRpc(request, origin, ctx) {
   });
 }
 
+// The per-call error for a call the upstream couldn't answer, used when
+// other calls in the same request do have an answer. `data.kind` matches
+// the 502 body's `kind`, so the page can tell "rate limited" from other
+// failures for this one call. -32005 is the conventional "limit exceeded"
+// code; any other upstream failure is an internal error (-32603).
+export function upstreamCallError(upstream) {
+  const kind = upstream.kind ?? "upstream-unreachable";
+  return {
+    code: kind === "upstream-rate-limited" ? -32005 : -32603,
+    message: `Upstream RPC request failed: ${upstream.detail}`,
+    data: { kind },
+  };
+}
+
 // Answers a list of already-validated requests, in order, using the cache
 // where it can:
 //   1. Identical calls (same identity — see callIdentity) are merged, so
@@ -542,10 +556,13 @@ async function handleRpc(request, origin, ctx) {
 //   3. Everything else goes upstream in one batch, with fresh internal ids
 //      (so callers' ids, even duplicate ones, can't collide), and each
 //      successful result is cached.
-//   4. If the upstream fails after its retries and every call that needed
-//      it has a cached result at most STALE_IF_ERROR_MAX_AGE_MS old, those
-//      are served instead, and the response is marked "stale". Otherwise
-//      the failure is returned exactly as before.
+//   4. If the upstream fails after its retries, each call that needed it
+//      gets its cached result if one is at most STALE_IF_ERROR_MAX_AGE_MS
+//      old (the response is then marked "stale"), and otherwise its own
+//      JSON-RPC error saying the upstream failed (see upstreamCallError).
+//      So one failed call never hides another call's answer. Only when
+//      no call at all has an answer is the whole request failed, exactly
+//      as before (502).
 // Returns { ok: true, answers, cacheStatus } — answers carry each
 // request's own id; cacheStatus is "hit" (all from cache), "miss" (none),
 // "partial", "stale", or "bypass" (nothing cacheable) — or the upstream
@@ -585,9 +602,18 @@ export async function resolveCalls(requests, requestUrl, ctx, now = Date.now()) 
     const upstream = await callUpstream(outgoing);
 
     if (!upstream.ok) {
-      if (!misses.every((e) => e.stale)) return upstream;
-      for (const e of misses) e.answer = e.stale;
-      cacheStatus = "stale";
+      const answeredElsewhere = hits > 0 || misses.some((e) => e.stale);
+      if (!answeredElsewhere) return upstream;
+      let staleUsed = false;
+      for (const e of misses) {
+        if (e.stale) {
+          e.answer = e.stale;
+          staleUsed = true;
+        } else {
+          e.answer = { error: upstreamCallError(upstream) };
+        }
+      }
+      cacheStatus = staleUsed ? "stale" : "partial";
     } else {
       const byId = new Map();
       for (const r of Array.isArray(upstream.body) ? upstream.body : [upstream.body]) {

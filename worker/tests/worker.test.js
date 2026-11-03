@@ -997,13 +997,50 @@ test("stale-if-error: older than 10 minutes is not served — the failure is ret
   assert.equal(res.cacheHeader, null);
 });
 
-test("stale-if-error: if any call that needed the upstream has no cached fallback, the failure is returned (no partial stale)", async (t) => {
+test("upstream failure: a call with a stale fallback is still answered; the other gets its own error (one failure never hides the other)", async (t) => {
   const { state } = setupCacheTest(t);
-  await post(call(1, "0x8da5cb5b"));
+  const primed = await post(call(1, "0x8da5cb5b"));
   state.now += 2 * 60_000;
   state.mode = "500";
   const res = await post([call(2, "0x8da5cb5b"), call(3, "0x99999999")]);
+  assert.equal(res.status, 200);
+  assert.equal(res.cacheHeader, "stale");
+  assert.deepEqual(res.body.map((r) => r.id), [2, 3]);
+  assert.equal(res.body[0].result, primed.body.result);
+  assert.equal(res.body[1].result, undefined);
+  assert.equal(res.body[1].error.code, -32603);
+  assert.equal(res.body[1].error.data.kind, "upstream-unreachable");
+  assert.match(res.body[1].error.message, /Upstream RPC request failed/);
+});
+
+test("upstream failure: a fresh cache hit is still returned next to a failed call, marked partial (not stale)", async (t) => {
+  const { state } = setupCacheTest(t);
+  const primed = await post(call(1, "0x8da5cb5b"));
+  state.now += 10_000;
+  state.mode = "throw";
+  const res = await post([call("owner", "0x8da5cb5b"), call("bal", "0x70a08231")]);
+  assert.equal(res.status, 200);
+  assert.equal(res.cacheHeader, "partial");
+  assert.equal(res.body[0].result, primed.body.result);
+  assert.equal(res.body[1].error.data.kind, "upstream-unreachable");
+});
+
+test("upstreamCallError: rate-limited failures get -32005 and kind upstream-rate-limited", async () => {
+  const { upstreamCallError } = await import("../index.js");
+  assert.deepEqual(upstreamCallError({ ok: false, detail: "Upstream is rate limited (HTTP 429) after 5 attempts", kind: "upstream-rate-limited" }), {
+    code: -32005,
+    message: "Upstream RPC request failed: Upstream is rate limited (HTTP 429) after 5 attempts",
+    data: { kind: "upstream-rate-limited" },
+  });
+  assert.equal(upstreamCallError({ ok: false, detail: "x" }).code, -32603);
+});
+
+test("upstream failure with nothing answered from cache: the whole request fails as before (502, no header)", async (t) => {
+  const { state } = setupCacheTest(t);
+  state.mode = "500";
+  const res = await post([call(1, "0x8da5cb5b"), call(2, "0x70a08231")]);
   assert.equal(res.status, 502);
+  assert.equal(res.cacheHeader, null);
 });
 
 test("stale data is only ever served with the X-Conge-Cache: stale header; a healthy upstream refreshes it", async (t) => {

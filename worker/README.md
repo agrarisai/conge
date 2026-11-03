@@ -72,15 +72,26 @@ API):
   copied to both.
 - **Only successes are cached.** A JSON-RPC error (e.g. a revert), a
   `429`/`5xx`, a timeout or any other upstream failure is never stored.
-- **Stale-if-error.** If the upstream still fails after its retries, and
-  *every* call that needed it has a cached answer **at most 10 minutes
-  old**, those answers are returned with the response header
-  `X-Conge-Cache: stale`. If even one call has no such fallback, the
-  failure is returned exactly as before (`502`). Stale data is never
-  returned without that header. *Trade-off:* during an upstream outage a
-  visitor may see a result up to 10 minutes old instead of "Unknown" for
-  that check; on a read-only scanner, slightly old public data is more
-  useful than nothing, and the header keeps it detectable.
+- **Stale-if-error.** If the upstream still fails after its retries, each
+  call that needed it gets its cached answer if one is **at most 10
+  minutes old**, and the response is marked `X-Conge-Cache: stale`. Stale
+  data is never returned without that header. *Trade-off:* during an
+  upstream outage a visitor may see a result up to 10 minutes old instead
+  of "Unknown" for that check; on a read-only scanner, slightly old public
+  data is more useful than nothing, and the header keeps it detectable.
+- **One failure never hides another answer.** When the upstream fails but
+  some calls in the request were answered (fresh from the cache, or
+  stale), the response is still `200`: the answered calls get their
+  results, and each call that couldn't be answered gets its own JSON-RPC
+  error — `{"code": -32005, "message": "Upstream RPC request failed: …",
+  "data": {"kind": "upstream-rate-limited"}}` (or `-32603` with kind
+  `upstream-unreachable` for any other upstream failure). Only when no
+  call at all has an answer is the whole request failed with `502`,
+  exactly as before. The site treats such a per-call error as "the RPC
+  was busy", never as a revert: owner() and the Uniswap v4 balance keep
+  whichever succeeded, while the sell simulation treats the whole batch
+  as not completed, so a busy RPC can never look like "selling is
+  blocked".
 - **Response header.** Every `POST /` answer carries `X-Conge-Cache`:
   `hit` (all from cache), `partial`, `miss`, `stale`, or `bypass`
   (nothing cacheable, e.g. only `eth_blockNumber`). It's exposed to the

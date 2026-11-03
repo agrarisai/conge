@@ -882,7 +882,13 @@ that affects scoring has resolved.
 
 None of the Worker rate-limit spacing or retries (`CHUNK_DELAY_MS` and
 friends) apply to Blockscout. Each Blockscout request is a single `fetch`
-with a 10s timeout and no retry.
+with a 10s timeout and no retry. Worker requests wait **12s**
+(`WORKER_FETCH_TIMEOUT_MS`): the Worker itself may spend up to its 8s
+upstream deadline retrying, and the page must not give up first, so it
+allows 4s more for the round trip and the Worker's own overhead.
+`tests/timeouts.test.js` keeps the two in step. A timeout shows in
+Technical details as "No response within 12s (the page stopped
+waiting)".
 
 ## Troubleshooting network connectivity
 
@@ -1225,8 +1231,11 @@ harder):
   served from Cloudflare's edge cache and never reaches the upstream; in a
   batch, only the uncached calls go upstream. If the upstream is still
   rate-limited after every retry, cached answers up to 10 minutes old are
-  returned instead, marked `X-Conge-Cache: stale` (only when every
-  affected call has one). See
+  returned instead, marked `X-Conge-Cache: stale`, and any call without
+  one gets its own "upstream failed" error rather than failing the
+  others. When `owner()` can't be read because of the RPC itself, the
+  finding says "The network RPC is busy right now. Try rescanning in a
+  minute." (Technical details still show the exact error.) See
   [worker/README.md → Caching](./worker/README.md#caching-and-stale-if-error).
 - **In `app.js`, reducing the burst itself**: the sell-simulation
   honeypot check now scans only the **top 5** holders for pool detection

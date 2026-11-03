@@ -687,6 +687,18 @@ export function scoreOwnerPrivileges(facts, thresholds = THRESHOLDS) {
 
 // --- Check 6: owner status --------------------------------------------------
 
+// Shown when a Worker read failed because of the shared upstream RPC
+// itself (rate limited, or erroring after the Worker's retries) — a
+// passing condition worth a rescan, not something wrong with the token.
+export const RPC_BUSY_MESSAGE = "The network RPC is busy right now. Try rescanning in a minute.";
+
+export function isUpstreamRpcFailure(diagnostics) {
+  return (
+    Array.isArray(diagnostics) &&
+    diagnostics.some((d) => d?.kind === "upstream-rate-limited" || d?.kind === "upstream-unreachable")
+  );
+}
+
 export function scoreOwnerStatus(owner, diagnostics = null) {
   if (!owner) {
     return finding({
@@ -694,7 +706,7 @@ export function scoreOwnerStatus(owner, diagnostics = null) {
       known: false,
       severity: SEVERITY.INFO,
       title: "Owner unknown",
-      detail: "The owner could not be read for this contract.",
+      detail: isUpstreamRpcFailure(diagnostics) ? RPC_BUSY_MESSAGE : "The owner could not be read for this contract.",
       diagnostics,
     });
   }
