@@ -31,7 +31,7 @@
     rel="stylesheet"
   />
 
-  <link rel="stylesheet" href="style.css?v=1f91e2861a" />
+  <link rel="stylesheet" href="style.css?v=1714e9dca5" />
 </head>
 <body class="page-scanner">
   <!-- Welcome splash. Shown once per tab session, before the scanner:
@@ -454,6 +454,23 @@
         </div>
       </div>
     </section>
+
+    <!-- Official $CONGE token: filled in from official-token.js by
+         official-token-ui.js (hidden until then, and if the config is
+         missing). -->
+    <section id="official-token" class="card official-token-card" aria-labelledby="official-token-heading" data-official-token hidden>
+      <h2 id="official-token-heading">Official token</h2>
+      <p class="official-token-line"><strong class="official-token-ticker" data-ot="ticker"></strong> · <span data-ot="name"></span> on <span data-ot="chain"></span></p>
+        <p class="official-token-label" id="official-token-address-label">Contract address</p>
+        <p class="official-token-address" data-ot="address" aria-labelledby="official-token-address-label"></p>
+        <div class="official-token-actions">
+          <button type="button" class="secondary-button" data-ot-copy><span data-ot-copy-label>Copy</span></button>
+          <a class="secondary-button" data-ot-link="explorer" href="#" target="_blank" rel="noopener noreferrer">View on explorer</a>
+          <a class="primary-button" data-ot-link="scan" href="./">Scan this token</a>
+        </div>
+        <p class="visually-hidden" data-ot-copy-status aria-live="polite"></p>
+      <p class="official-token-more"><a href="official-token.html">How to verify the official token</a></p>
+    </section>
   </main>
 
   <footer class="site-footer">
@@ -475,6 +492,7 @@
         <ul class="footer-links">
           <li><a href="how-it-works.html">How it works</a></li>
           <li><a href="faq.html">FAQ</a></li>
+          <li><a href="official-token.html">Official token</a></li>
         </ul>
       </div>
       <div class="footer-col">
@@ -494,6 +512,8 @@
   <script>
     document.getElementById("footer-year").textContent = new Date().getFullYear();
   </script>
+  <script src="official-token.js?v=81c967f51b" defer></script>
+  <script src="official-token-ui.js?v=43dbba13fd" defer></script>
   <script src="nav.js?v=b981a0accb" defer></script>
   <script src="scroll-fx.js?v=67bfb40a43" defer></script>
   <script type="module" src="app.js?v=08c6d04bf5"></script>
