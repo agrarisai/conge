@@ -1,7 +1,6 @@
 // Cache-busting for the site's own CSS/JS — no build step, no dependencies.
 //
-// Every reference to style.css / nav.js / scroll-fx.js / faq.js / app.js /
-// official-token.js / official-token-ui.js in
+// Every reference to style.css / nav.js / scroll-fx.js / faq.js / app.js in
 // the HTML pages (and app.js's import of scoring.js) carries a ?v=<hash> of
 // that file's current contents. When a file changes, its URL changes, so a
 // browser or CDN can never pair new HTML with a stale cached copy of the old
@@ -20,10 +19,10 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PAGES = ["index.html", "about.html", "how-it-works.html", "faq.html", "disclaimer.html", "official-token.html"];
+const PAGES = ["index.html", "about.html", "how-it-works.html", "faq.html", "disclaimer.html"];
 // scoring.js before app.js: app.js's import of scoring.js carries scoring's
 // version, so app.js's own hash must be taken after that's been written.
-const ASSETS = ["style.css", "nav.js", "scroll-fx.js", "faq.js", "scoring.js", "app.js", "official-token.js", "official-token-ui.js"];
+const ASSETS = ["style.css", "nav.js", "scroll-fx.js", "faq.js", "scoring.js", "app.js"];
 
 const read = (f) => readFileSync(path.join(ROOT, f), "utf8");
 const hashOf = (text) => createHash("sha256").update(text).digest("hex").slice(0, 10);

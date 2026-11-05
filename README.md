@@ -582,28 +582,13 @@ either. It's built entirely with plain CSS custom properties in
 
 ## Pages
 
-Alongside the scanner itself (`index.html`), the site has five static
+Alongside the scanner itself (`index.html`), the site has four static
 content pages — plain HTML files at the repo root, same
 head/meta/favicon pattern as `index.html`, no build step, and no scanning
 logic of their own (they don't load `app.js` — there's no scanning UI on
 them, so none of its DOM lookups apply). Like every page, they do load
 `nav.js` for the shared header nav toggle — see below.
 
-- **`official-token.html`** — the official $CONGE token: name, ticker,
-  chain and the full contract address, with **Copy**, **View on explorer**
-  (`robin.etherscan.io/token/<address>`) and **Scan this token** (opens the
-  scanner with `?address=`), plus the verification warnings (only trust
-  the address published on conge.site and Conge's official accounts;
-  verify before interacting; independent, not affiliated with Robinhood,
-  Uniswap or Pons; not financial advice). The home page has a small
-  "Official token" card with the same details and buttons (there, **Scan
-  this token** scans in place). Both are filled in by
-  `official-token-ui.js` from **`official-token.js`, the one file that
-  holds the token's details** — change the token there and nowhere else.
-  The address is stored in checksum form (as viem's `getAddress()`
-  returns it); `tests/official-token.test.js` checks that, and that no
-  other file hard-codes the address. Linked from every page's footer and
-  from the FAQ.
 - **`about.html`** — what Conge is, and a short, honest note on who
   built it: an independent, solo/small project, explicitly **not**
   affiliated with Robinhood Markets, Inc. No team bios, no company
@@ -693,7 +678,7 @@ claim the page itself doesn't back up. Every page also has:
   asset — no new image was added).
 
 At the repo root, `robots.txt` allows all crawling and points at
-`sitemap.xml`, which lists all six pages' absolute URLs (`lastmod` set
+`sitemap.xml`, which lists all five pages' absolute URLs (`lastmod` set
 to each page's actual last-touched date, not a guess). Both are plain
 static files — nothing generates them, so if a page is ever added,
 renamed, or removed, `sitemap.xml` needs updating by hand alongside it.
@@ -706,10 +691,6 @@ about.html           # content page — see "Pages" below
 how-it-works.html    # content page — see "Pages" below
 faq.html             # content page — see "Pages" below
 disclaimer.html      # content page — see "Pages" below
-official-token.html  # the official $CONGE token page — see "Pages" below
-official-token.js    # the official token's details (name, ticker, address, chain) — the only place they're written
-official-token-ui.js # fills the home page card and official-token.html from official-token.js; Copy button
-tests/official-token.test.js  # checksum/validity of the configured address, and that no other file hard-codes it
 style.css            # styling for every page above (mobile-first, light theme)
 nav.js                # shared header hamburger-nav toggle, loaded by every page
 faq.js                # FAQ accordion (faq.html only; answers stay visible without JS)
@@ -721,7 +702,7 @@ scripts/contrast-audit.mjs  # WCAG contrast check of every real text/background 
 scripts/version-assets.mjs  # cache-busting: stamps ?v=<content hash> on style.css/JS references (run after editing them)
 tests/asset-versions.test.js  # fails if any ?v= is stale (node --test tests/asset-versions.test.js)
 robots.txt           # allows all crawling, points to sitemap.xml — see "SEO" below
-sitemap.xml           # all six pages' absolute URLs — see "SEO" below
+sitemap.xml           # all five pages' absolute URLs — see "SEO" below
 assets/              # brand imagery — see "Branding assets" below
 worker/              # Cloudflare Worker RPC proxy — see "Worker" below
   index.js             # the Worker itself (single file, no runtime dependencies)
